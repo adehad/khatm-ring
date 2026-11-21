@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11,<3.13"
-# dependencies = ["opencv-python-headless", "numpy", "shapely"]
-# ///
 """Lift the seal inscription from a reference rendering and lay it out on the ring face.
 
 The references in `reference/seal/` are public-domain renderings of the prophetic
@@ -16,10 +12,10 @@ scales each piece; edit it by hand, or drag the pieces in Blender with
 `live_letters.py` and read them back. Its MIXED entry also picks, per piece,
 which rendering the piece is traced from.
 
-    uv run scripts/inscription.py [variant]        variant: MIXED (the default) or one of VARIANTS
+    khatm inscription [variant]        variant: MIXED (the default) or one of VARIANTS
 
-Outputs in `extracted/`:
-  face-inscription.json   laid-out pieces in mm, read by `build_ring.py`
+Outputs in `reference/extracted/`:
+  face-inscription.json   laid-out pieces in mm, read by `ring_sdf.py`
   face-inscription.svg    one <g> per piece, for any vector tool
   inscription-<variant>.png   preview of each variant with the layout applied
   inscription-variants.jpg    those previews beside the original ring's face
@@ -36,9 +32,7 @@ from shapely import affinity, minimum_bounding_circle, minimum_bounding_radius
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
-ROOT = Path(__file__).resolve().parent.parent
-SEALS = ROOT / "reference" / "seal"
-LAYOUT = ROOT / "design" / "inscription-layout.json"
+from khatm.paths import EXTRACTED, INSCRIPTION, LAYOUT, SEALS
 
 VARIANTS = {
     "canonical": "Muhammad_Seal.png",
@@ -59,9 +53,17 @@ MIN_FEATURE_MM = 0.4
 MIN_COUNTER_MM = 0.6
 
 
+def read_image(path: Path, flags: int = cv2.IMREAD_COLOR) -> np.ndarray:
+    """cv2.imread, but raising instead of returning None for a missing or unreadable file."""
+    img = cv2.imread(str(path), flags)
+    if img is None:
+        raise FileNotFoundError(path)
+    return img
+
+
 def trace(image: Path) -> tuple[MultiPolygon, Polygon]:
     """White letters inside the dark seal, and the seal's own outline, in pixel coordinates."""
-    rgba = cv2.imread(str(image), cv2.IMREAD_UNCHANGED)
+    rgba = read_image(image, cv2.IMREAD_UNCHANGED)
     if rgba.shape[2] == 4:
         a = rgba[..., 3:4] / 255.0
         rgb = (rgba[..., :3] * a + 255 * (1 - a)).astype(np.uint8)
@@ -188,10 +190,13 @@ def clearances(pieces: dict[str, Polygon], field: Polygon) -> list[str]:
     for i, a in enumerate(names):
         spill = pieces[a].difference(inside)
         if not spill.is_empty:
-            depth = max(inside.exterior.distance(Point(xy)) for xy in pieces[a].exterior.coords
-                        if not inside.contains(Point(xy)))
+            depth = max(
+                inside.exterior.distance(Point(xy))
+                for xy in pieces[a].exterior.coords
+                if not inside.contains(Point(xy))
+            )
             warn.append(f"{a} is {depth:.2f} mm into the rim gap")
-        for b in names[i + 1:]:
+        for b in names[i + 1 :]:
             gap = pieces[a].distance(pieces[b])
             if gap < PIECE_GAP_MM:
                 warn.append(f"{a} and {b} are {gap:.2f} mm apart")
@@ -215,8 +220,11 @@ def svg(pieces: dict[str, Polygon], field: Polygon) -> str:
     for name, p in pieces.items():
         d = " ".join(path(r.coords) for r in [p.exterior, *p.interiors])
         body.append(f'<g id="{name}"><path d="{d}" fill-rule="evenodd"/></g>')
-    return ('<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000">\n'
-            + "\n".join(body) + "\n</svg>\n")
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000">\n'
+        + "\n".join(body)
+        + "\n</svg>\n"
+    )
 
 
 def preview(pieces: dict[str, Polygon], field: Polygon, path: Path, labels: bool = False, px: int = 700) -> None:
@@ -235,15 +243,23 @@ def preview(pieces: dict[str, Polygon], field: Polygon, path: Path, labels: bool
             cv2.fillPoly(img, [pts(h)], (35, 40, 45), cv2.LINE_AA)
         if labels:
             q = p.representative_point()
-            cv2.putText(img, name, (int(c + q.x * s) - 30, int(c - q.y * s)), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.45, (0, 90, 230), 1, cv2.LINE_AA)
+            cv2.putText(
+                img,
+                name,
+                (int(c + q.x * s) - 30, int(c - q.y * s)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (0, 90, 230),
+                1,
+                cv2.LINE_AA,
+            )
     cv2.imwrite(str(path), img)
 
 
 def variant_sheet(out: Path, px: int = 450) -> None:
     """The variant previews side by side, ending with the original ring's face."""
-    tiles = [cv2.resize(cv2.imread(str(out / f"inscription-{n}.png")), (px, px)) for n in [*VARIANTS, MIXED]]
-    original = cv2.imread(str(ROOT / "reference" / "02-face-inscription.jpg"))[960:1340, 470:850]
+    tiles = [cv2.resize(read_image(out / f"inscription-{n}.png"), (px, px)) for n in [*VARIANTS, MIXED]]
+    original = read_image(EXTRACTED / "02-face-inscription.png")[960:1340, 470:850]
     tiles.append(cv2.resize(original, (px, px)))
     cv2.imwrite(str(out / "inscription-variants.jpg"), np.hstack(tiles))
 
@@ -269,10 +285,11 @@ def face_for(variant: str, layout: dict) -> tuple[dict[str, Polygon], Polygon]:
     return apply_layout(pieces, spec), field_outline(sources[DEFAULT][1])
 
 
-def main() -> None:
-    variant = sys.argv[1] if len(sys.argv) > 1 else MIXED
+def main(argv: list[str] | None = None) -> None:
+    args = sys.argv[1:] if argv is None else argv
+    variant = args[0] if args else MIXED
     layout = json.loads(LAYOUT.read_text()) if LAYOUT.exists() else {}
-    out = ROOT / "extracted"
+    out = EXTRACTED
     for name in [*VARIANTS, MIXED]:
         preview(*face_for(name, layout), out / f"inscription-{name}.png")
     variant_sheet(out)
@@ -282,10 +299,12 @@ def main() -> None:
         "face_mm": FACE_MM,
         "variant": variant,
         "field": ring_json(field.exterior),
-        "letters": [{"name": n, "outline": ring_json(p.exterior), "holes": [ring_json(h) for h in p.interiors]}
-                    for n, p in pieces.items()],
+        "letters": [
+            {"name": n, "outline": ring_json(p.exterior), "holes": [ring_json(h) for h in p.interiors]}
+            for n, p in pieces.items()
+        ],
     }
-    (out / "face-inscription.json").write_text(json.dumps(data, indent=1))
+    INSCRIPTION.write_text(json.dumps(data, indent=1))
     (out / "face-inscription.svg").write_text(svg(pieces, field))
     print(f"{variant}: {', '.join(pieces)}")
     for w in clearances(pieces, field):

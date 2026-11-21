@@ -2,12 +2,13 @@
 
 The geometry lives in `ring_sdf.py`, which models the whole ring as one signed
 distance field and meshes it with marching cubes. This script runs it, imports
-the mesh, assigns materials, exports STL and GLB, and renders.
+the mesh, assigns materials, and writes the STL, the .blend, the stats and the
+renders to the cache folder. `khatm publish` takes them from there.
 
 Headless:
-    blender -b -P scripts/build_ring.py -- [--render]
+    khatm build [--render]
 Live, in a Blender running the BlenderMCP add-on:
-    python scripts/blender_live.py scripts/live_build.py
+    khatm live-build
 
 The live build also adds a "Khatm" tab to the 3D view's sidebar, where the
 ring size and target weight in design/ring.toml can be changed and rebuilt.
@@ -25,14 +26,12 @@ import bmesh
 import bpy
 from mathutils import Vector
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT / "scripts") not in sys.path:
-    sys.path.insert(0, str(ROOT / "scripts"))
-from ring_size import equivalents, inside_diameter  # noqa: E402
+SRC = Path(__file__).resolve().parents[2]
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+from khatm.paths import BLEND, BODY, PARAMS, RENDERS, ROOT, STATS, STL  # noqa: E402
+from khatm.ring_size import equivalents, inside_diameter  # noqa: E402
 
-OUT = ROOT / "model"
-PARAMS = ROOT / "design" / "ring.toml"
-BODY = OUT / "body.ply"
 KEEP_COLLECTION = "inscription"
 DECIMATE_RATIO = 0.25
 
@@ -80,7 +79,7 @@ def link(obj: bpy.types.Object) -> bpy.types.Object:
 
 def mesh_body(solve: bool = True) -> dict:
     """Run the distance-field script with uv (Blender's Python lacks its packages)."""
-    cmd = ["uv", "run", str(ROOT / "scripts" / "ring_sdf.py"), "--out", str(BODY)]
+    cmd = ["uv", "run", "khatm", "sdf", "--out", str(BODY)]
     if solve:
         cmd.append("--solve")
     done = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
@@ -204,7 +203,7 @@ VIEWS = {
 }
 
 
-def render_views(views=VIEWS, folder: Path = OUT / "renders") -> None:
+def render_views(views=VIEWS, folder: Path = RENDERS) -> None:
     scene = bpy.context.scene
     cam_data = bpy.data.cameras.new("cam")
     cam_data.lens = 85
@@ -225,8 +224,8 @@ def export(ring: bpy.types.Object) -> None:
     bpy.ops.object.select_all(action="DESELECT")
     ring.select_set(True)
     bpy.context.view_layer.objects.active = ring
-    bpy.ops.wm.stl_export(filepath=str(OUT / "khatm-ring.stl"), export_selected_objects=True)
-    bpy.ops.export_scene.gltf(filepath=str(OUT / "khatm-ring.glb"), use_selection=True)
+    STL.parent.mkdir(parents=True, exist_ok=True)
+    bpy.ops.wm.stl_export(filepath=str(STL), export_selected_objects=True)
 
 
 def run(render: bool = False) -> dict:
@@ -236,7 +235,8 @@ def run(render: bool = False) -> dict:
     if render:
         setup_render()
         render_views()
-    bpy.ops.wm.save_as_mainfile(filepath=str(OUT / "khatm-ring.blend"))
+    STATS.write_text(json.dumps(stats, indent=1) + "\n", encoding="utf-8")
+    bpy.ops.wm.save_as_mainfile(filepath=str(BLEND))
     return stats
 
 
@@ -256,7 +256,7 @@ def write_params(size: str, target_g: float) -> None:
 
 
 class KHATM_OT_rebuild(bpy.types.Operator):
-    """Save the size and weight to design/ring.toml, then rebuild the ring (a few minutes)"""
+    """Save the size and weight to design/ring.toml, rebuild the ring and publish it to out/ (a few minutes)"""
 
     bl_idname = "khatm.rebuild"
     bl_label = "Rebuild ring"
@@ -270,9 +270,15 @@ class KHATM_OT_rebuild(bpy.types.Operator):
             return {"CANCELLED"}
         write_params(scene.khatm_size, scene.khatm_target_g)
         stats = run()
-        scene.khatm_result = (f"{stats['grams_925']:.2f} g, band ends {stats['band_end_width_mm']}"
-                              f" x {stats['band_end_thickness_mm']} mm"
-                              + (f"  ({stats['warning']})" if "warning" in stats else ""))
+        # Publishing needs numpy and Pillow, which Blender's Python lacks.
+        done = subprocess.run(["uv", "run", "khatm", "publish"], cwd=ROOT, capture_output=True, text=True)
+        if done.returncode != 0:
+            self.report({"ERROR"}, done.stderr[-500:])
+            return {"CANCELLED"}
+        scene.khatm_result = (
+            f"{stats['grams_925']:.2f} g, band ends {stats['band_end_width_mm']}"
+            f" x {stats['band_end_thickness_mm']} mm" + (f"  ({stats['warning']})" if "warning" in stats else "")
+        )
         return {"FINISHED"}
 
 
@@ -309,12 +315,14 @@ def register() -> None:
         bpy.utils.register_class(cls)
     params = read_params()
     bpy.types.Scene.khatm_size = bpy.props.StringProperty(
-        name="Size", default=params["size"], description="US 9, UK R1/2, EU 59, or inside diameter as 19 mm")
+        name="Size", default=params["size"], description="US 9, UK R1/2, EU 59, or inside diameter as 19 mm"
+    )
     bpy.types.Scene.khatm_target_g = bpy.props.FloatProperty(
-        name="Target weight (g)", default=params["target_g"], min=3.0, max=12.0, step=5, precision=2)
+        name="Target weight (g)", default=params["target_g"], min=3.0, max=12.0, step=5, precision=2
+    )
     bpy.types.Scene.khatm_result = bpy.props.StringProperty(name="Last build")
 
 
 if __name__ == "__main__":
-    args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    args = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     run(render="--render" in args)

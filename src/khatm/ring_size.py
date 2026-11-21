@@ -39,5 +39,10 @@ def equivalents(d: float) -> dict:
     uk = round((d * math.pi - UK_A_CIRC_MM) / UK_STEP_MM * 2) / 2
     uk = min(max(uk, 0.0), len(UK_LETTERS) - 1)
     letter = UK_LETTERS[int(uk)] + ("1/2" if uk % 1 else "")
-    return {"diameter_mm": round(d, 2), "circumference_mm": round(d * math.pi, 1),
-            "US": f"{us:g}", "UK": letter, "EU": f"{d * math.pi:.0f}"}
+    return {
+        "diameter_mm": round(d, 2),
+        "circumference_mm": round(d * math.pi, 1),
+        "US": f"{us:g}",
+        "UK": letter,
+        "EU": f"{d * math.pi:.0f}",
+    }

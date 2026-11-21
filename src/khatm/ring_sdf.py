@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11,<3.13"
-# dependencies = ["numpy", "scipy", "scikit-image", "opencv-python-headless"]
-# ///
 """The khatm ring as one signed distance field, meshed once with marching cubes.
 
 Every part (head, the two arms, the open back, the field recess, the letters) is
@@ -9,7 +5,7 @@ a distance field, and they are combined with smooth unions and subtractions.
 Joins therefore blend by construction: no welding, no smoothing afterwards, no
 seams where a smoothing zone ends.
 
-    uv run scripts/ring_sdf.py [--size "US 9"] [--target-g 5.8] [--solve] [--voxel 0.05] [--out model/body.ply]
+    khatm sdf [--size "US 9"] [--target-g 5.8] [--solve] [--voxel 0.05] [--out cache/body.ply]
 
 The size and target weight come from design/ring.toml unless given here.
 `--solve` finds the band's end width that meets the target weight before
@@ -29,11 +25,8 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 from skimage.measure import marching_cubes
 
-from ring_size import equivalents, inside_diameter
-
-ROOT = Path(__file__).resolve().parent.parent
-INSCRIPTION = ROOT / "extracted" / "face-inscription.json"
-PARAMS = ROOT / "design" / "ring.toml"
+from khatm.paths import BODY, INSCRIPTION, PARAMS
+from khatm.ring_size import equivalents, inside_diameter
 
 # Two shar'i dirhams at 2.975 g each is 5.95 g, the Maliki limit for a man's
 # silver ring. design/ring.toml sets the target below it, for the disputed
@@ -82,7 +75,15 @@ K_LETTER = 0.1
 RASTER = 0.01
 
 
-def set_size(inner_d):
+# Set by set_size(), which every size change goes through.
+INNER_D: float
+R_FINGER: float
+R_SADDLE: float
+Z_TOP: float
+Z_FIELD: float
+
+
+def set_size(inner_d: float) -> None:
     """Fix the finger size; every height on the ring is measured from it."""
     global INNER_D, R_FINGER, R_SADDLE, Z_TOP, Z_FIELD
     INNER_D = inner_d
@@ -126,7 +127,7 @@ class Field2D:
 
     def __init__(self, polys, u0, u1, v0, v1):
         self.u0, self.v1 = u0, v1
-        w, h = int(round((u1 - u0) / RASTER)) + 1, int(round((v1 - v0) / RASTER)) + 1
+        w, h = round((u1 - u0) / RASTER) + 1, round((v1 - v0) / RASTER) + 1
         mask = np.zeros((h, w), np.uint8)
         for outline, holes in polys:
             cv2.fillPoly(mask, [self._px(outline)], 1)
@@ -150,10 +151,11 @@ class Field2D:
         cols = (u - self.u0) / RASTER
         rows = (self.v1 - v) / RASTER
         h, w = self.sdf.shape
-        d = map_coordinates(self.sdf, [np.clip(rows, 0, h - 1).ravel(), np.clip(cols, 0, w - 1).ravel()],
-                            order=1, mode="nearest").reshape(u.shape)
+        d = map_coordinates(
+            self.sdf, [np.clip(rows, 0, h - 1).ravel(), np.clip(cols, 0, w - 1).ravel()], order=1, mode="nearest"
+        ).reshape(u.shape)
         # Outside the raster, add the distance to its edge so the field stays a bound.
-        over = np.maximum.reduce([-cols, cols - (w - 1), -rows, rows - (h - 1), np.zeros_like(cols)]) * RASTER
+        over = np.stack([-cols, cols - (w - 1), -rows, rows - (h - 1), np.zeros_like(cols)]).max(axis=0) * RASTER
         return d + over
 
 
@@ -172,16 +174,16 @@ def head(y, rho, z, rf):
     BOAT_EDGE under the face edge, so from the side the head is boat-shaped.
     """
     r, slope = head_radius(z)
-    qx = (rho - r) / np.sqrt(1 + slope ** 2) + CROWN_R
+    qx = (rho - r) / np.sqrt(1 + slope**2) + CROWN_R
     qz = z - Z_TOP + CROWN_R
     d = np.minimum(np.maximum(qx, qz), 0) + np.hypot(np.maximum(qx, 0), np.maximum(qz, 0)) - CROWN_R
     y0 = BAND_W_ROOT / 2 - 0.6
     u = np.clip((np.abs(y) - y0) / (FACE_D / 2 - y0), 0.0, 1.0)
-    floor = R_SADDLE + (Z_TOP - BOAT_EDGE - R_SADDLE) * u ** BOAT_POWER
+    floor = R_SADDLE + (Z_TOP - BOAT_EDGE - R_SADDLE) * u**BOAT_POWER
     d = smax(d, floor - rf, np.where(u > 0, K_BOAT, K_SEAT))
     # Stop the wall a millimetre below where it meets the band, inside the band's metal.
     r_wall = FACE_D / 2 + HEAD_FLARE
-    z_join = np.sqrt(max((R_FINGER + BAND_T_ROOT) ** 2 - r_wall ** 2, 0.0))
+    z_join = np.sqrt(max((R_FINGER + BAND_T_ROOT) ** 2 - r_wall**2, 0.0))
     return np.maximum(d, z_join - 1.0 - z)
 
 
@@ -192,17 +194,17 @@ def cavity(rho, z):
     # Low down the wall leans out by CAVITY_LEAN and reaches the finger hole
     # along its tangent, so the two run into each other without a ridge.
     x_meet = FACE_D / 2 + HEAD_FLARE - WALL_T + CAVITY_LEAN
-    z_meet = np.sqrt(max(R_FINGER ** 2 - x_meet ** 2, 0.0))
+    z_meet = np.sqrt(max(R_FINGER**2 - x_meet**2, 0.0))
     if z_meet > 0:
         span = 2 * CAVITY_LEAN * x_meet / z_meet
         u = np.clip((z_meet + span - z) / span, 0.0, 1.0)
         r = r + CAVITY_LEAN * u * u
         slope = slope + 2 * CAVITY_LEAN * u / span
-    walls = (rho - (r - WALL_T)) / np.sqrt(1 + slope ** 2)
+    walls = (rho - (r - WALL_T)) / np.sqrt(1 + slope**2)
     walls = np.maximum(walls, z_meet - 0.5 - z)
     r_c = FACE_D / 2 - WALL_T
-    dome = (PLATE_RIM - PLATE_CENTRE) / r_c ** 2
-    ceiling = Z_FIELD - PLATE_CENTRE - dome * rho ** 2
+    dome = (PLATE_RIM - PLATE_CENTRE) / r_c**2
+    ceiling = Z_FIELD - PLATE_CENTRE - dome * rho**2
     under = (z - ceiling) / np.sqrt(1 + (2 * dome * rho) ** 2)
     return smax(walls, under, K_CAVITY_CORNER)
 
@@ -252,8 +254,9 @@ class Ring:
         if abs(data["face_mm"] - FACE_D) > 1e-6:
             raise ValueError("face-inscription.json was drawn for a different FACE_D; rerun inscription.py")
         self.field = Field2D([(data["field"], [])], -FACE_D / 2, FACE_D / 2, -FACE_D / 2, FACE_D / 2)
-        self.letters = Field2D([(p["outline"], p["holes"]) for p in data["letters"]],
-                               -FACE_D / 2, FACE_D / 2, -FACE_D / 2, FACE_D / 2)
+        self.letters = Field2D(
+            [(p["outline"], p["holes"]) for p in data["letters"]], -FACE_D / 2, FACE_D / 2, -FACE_D / 2, FACE_D / 2
+        )
 
     def sdf(self, x, y, z, w_end):
         rho = np.hypot(x, y)
@@ -282,7 +285,7 @@ class Ring:
     def grid(self, h):
         lo = np.array([-R_FINGER - BAND_T_ROOT - 1.2, -FACE_D / 2 - 0.4, -R_FINGER - BAND_T_ROOT - 2.0])
         hi = np.array([R_FINGER + BAND_T_ROOT + 1.2, FACE_D / 2 + 0.4, Z_TOP + 0.3])
-        axes = [np.arange(a, b + h, h, dtype=np.float32) for a, b in zip(lo, hi)]
+        axes = [np.arange(a, b + h, h, dtype=np.float32) for a, b in zip(lo, hi, strict=True)]
         return axes
 
     def volume_field(self, h, w_end):
@@ -295,7 +298,7 @@ class Ring:
 
     def volume_mm3(self, h, w_end):
         vol, _ = self.volume_field(h, w_end)
-        return float(np.clip(0.5 - vol / h, 0.0, 1.0).sum() * h ** 3)
+        return float(np.clip(0.5 - vol / h, 0.0, 1.0).sum() * h**3)
 
 
 def secant(volume, x0, step, bounds, target):
@@ -318,10 +321,12 @@ def solve_band(ring, target_g, h=0.1):
     target = target_g / DENSITY_G_MM3
     w, v = secant(lambda w: ring.volume_mm3(h, w), BAND_W_END, 0.5, BAND_W_END_RANGE, target)
     if abs(v - target) > 1.0 and w in BAND_W_END_RANGE:
+
         def volume(t):
             global BAND_T_END
             BAND_T_END = t
             return ring.volume_mm3(h, w)
+
         BAND_T_END, _ = secant(volume, BAND_T_END, 0.1, BAND_T_END_RANGE, target)
     return w, BAND_T_END
 
@@ -329,11 +334,13 @@ def solve_band(ring, target_g, h=0.1):
 def write_ply(path, verts, normals, faces):
     """Binary PLY with per-vertex normals, so the importer shades from the
     field's gradient rather than from marching-cubes triangle averages."""
-    with open(path, "wb") as f:
-        f.write(f"ply\nformat binary_little_endian 1.0\nelement vertex {len(verts)}\n"
-                "property float x\nproperty float y\nproperty float z\n"
-                "property float nx\nproperty float ny\nproperty float nz\n"
-                f"element face {len(faces)}\nproperty list uchar int vertex_indices\nend_header\n".encode())
+    with Path(path).open("wb") as f:
+        f.write(
+            f"ply\nformat binary_little_endian 1.0\nelement vertex {len(verts)}\n"
+            "property float x\nproperty float y\nproperty float z\n"
+            "property float nx\nproperty float ny\nproperty float nz\n"
+            f"element face {len(faces)}\nproperty list uchar int vertex_indices\nend_header\n".encode()
+        )
         f.write(np.hstack([verts, normals]).astype("<f4").tobytes())
         rows = np.empty(len(faces), dtype=[("n", "u1"), ("i", "<i4", 3)])
         rows["n"] = 3
@@ -341,7 +348,7 @@ def write_ply(path, verts, normals, faces):
         f.write(rows.tobytes())
 
 
-def main():
+def main(argv: list[str] | None = None) -> None:
     params = tomllib.loads(PARAMS.read_text(encoding="utf-8"))
     ap = argparse.ArgumentParser()
     ap.add_argument("--size", default=params["size"])
@@ -349,8 +356,9 @@ def main():
     ap.add_argument("--voxel", type=float, default=0.05)
     ap.add_argument("--w-end", type=float, default=BAND_W_END)
     ap.add_argument("--solve", action="store_true")
-    ap.add_argument("--out", default=str(ROOT / "model" / "body.ply"))
-    a = ap.parse_args()
+    ap.add_argument("--out", default=str(BODY))
+    a = ap.parse_args(argv)
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
 
     set_size(inside_diameter(a.size))
     ring = Ring()
@@ -361,7 +369,7 @@ def main():
     # With the default gradient direction skimage winds faces outward for a
     # field that is negative inside, but its normals point inward.
     write_ply(a.out, verts, -normals, faces)
-    v = float(np.clip(0.5 - vol / a.voxel, 0.0, 1.0).sum() * a.voxel ** 3)
+    v = float(np.clip(0.5 - vol / a.voxel, 0.0, 1.0).sum() * a.voxel**3)
     stats = {
         "size": equivalents(INNER_D),
         "target_g": a.target_g,
@@ -370,7 +378,7 @@ def main():
         "band_end_width_mm": round(w_end, 2),
         "band_end_thickness_mm": round(t_end, 2),
         "z_field": Z_FIELD,
-        "faces": int(len(faces)),
+        "faces": len(faces),
         "mesh": a.out,
     }
     if a.solve and abs(stats["grams_925"] - a.target_g) > 0.05:

@@ -1,6 +1,6 @@
 # Seal references
 
-Renderings of the prophetic seal from Wikimedia Commons. `scripts/inscription.py` traces the letters from the first three.
+Renderings of the prophetic seal from Wikimedia Commons. `src/khatm/inscription.py` traces the letters from the first three.
 
 | File | Commons page | Licence |
 |---|---|---|

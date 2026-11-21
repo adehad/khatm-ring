@@ -1,3 +1,7 @@
-*.blend1
 __pycache__/
-model/body.ply
+.venv/
+*.blend1
+# Intermediate build files
+cache/
+# Worktree of the main branch, where builds are published
+out/

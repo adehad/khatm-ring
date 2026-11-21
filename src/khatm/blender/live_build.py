@@ -1,16 +1,15 @@
-"""Snippet sent to a live Blender by `blender_live.py`: rebuild the ring and frame it."""
+"""Snippet sent to a live Blender by `khatm live-build`: rebuild the ring and frame it."""
 
 import importlib
-import sys
 
 import bpy
 
-SCRIPTS = r"V:\dev\Personal\khatm-ring\scripts"
-if SCRIPTS not in sys.path:
-    sys.path.insert(0, SCRIPTS)
-import build_ring  # noqa: E402
+import khatm.paths
+import khatm.ring_size
+from khatm.blender import build_ring
 
-importlib.reload(build_ring)
+for module in (khatm.paths, khatm.ring_size, build_ring):
+    importlib.reload(module)
 build_ring.register()
 stats = build_ring.run(render=False)
 

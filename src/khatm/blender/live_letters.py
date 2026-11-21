@@ -1,15 +1,14 @@
 """Edit the inscription layout by hand in a live Blender.
 
-Sent to Blender through the BlenderMCP add-on (`blender_live.py`, or the MCP
-`execute_blender_code` tool):
+Sent to Blender through the BlenderMCP add-on:
 
-    exec(open(r"...\\scripts\\live_letters.py").read()); show()
-        Lays each letter piece from `extracted/face-inscription.json` on the
-        ring face as its own flat object in the "inscription" collection. Move
-        (G), turn about Z (R Z) or scale (S) them in the top view.
-    exec(open(r"...\\scripts\\live_letters.py").read()); read_back()
+    khatm live -c "from khatm.blender import live_letters; live_letters.show()"
+        Lays each letter piece from `reference/extracted/face-inscription.json`
+        on the ring face as its own flat object in the "inscription" collection.
+        Move (G), turn about Z (R Z) or scale (S) them in the top view.
+    khatm live -c "from khatm.blender import live_letters; live_letters.read_back()"
         Folds those moves into `design/inscription-layout.json`. Then run
-        `uv run scripts/inscription.py` and rebuild the ring.
+        `khatm inscription` and rebuild the ring.
 
 Each object stores the centroid it was laid at, so read_back() adds only what
 changed since show().
@@ -17,18 +16,16 @@ changed since show().
 
 import json
 import math
-from pathlib import Path
 
 import bpy
 
-ROOT = Path(r"V:\dev\Personal\khatm-ring")
-INSCRIPTION = ROOT / "extracted" / "face-inscription.json"
-LAYOUT = ROOT / "design" / "inscription-layout.json"
+from khatm.paths import INSCRIPTION, LAYOUT
+
 COLLECTION = "inscription"
 
 
 def _centroid(ring):
-    xs, ys = zip(*ring)
+    xs, ys = zip(*ring, strict=True)
     return sum(xs) / len(xs), sum(ys) / len(ys)
 
 
@@ -53,7 +50,7 @@ def show(z: float | None = None) -> None:
         for loop in [piece["outline"], *piece["holes"]]:
             spline = curve.splines.new("POLY")
             spline.points.add(len(loop) - 1)
-            for pt, (x, y) in zip(spline.points, loop):
+            for pt, (x, y) in zip(spline.points, loop, strict=True):
                 pt.co = (x - cx, y - cy, 0.0, 1.0)
             spline.use_cyclic_u = True
         curve.materials.append(mat)
