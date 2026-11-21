@@ -13,9 +13,10 @@ ring and any tip too fine to fill is rounded off.
 Each connected letter group is a named piece (`allah_1` is the rightmost piece of
 the top line, and so on). `design/inscription-layout.json` moves, turns and
 scales each piece; edit it by hand, or drag the pieces in Blender with
-`live_letters.py` and read them back.
+`live_letters.py` and read them back. Its MIXED entry also picks, per piece,
+which rendering the piece is traced from.
 
-    uv run scripts/inscription.py [variant]        variant: one of VARIANTS, default DEFAULT
+    uv run scripts/inscription.py [variant]        variant: MIXED (the default) or one of VARIANTS
 
 Outputs in `extracted/`:
   face-inscription.json   laid-out pieces in mm, read by `build_ring.py`
@@ -45,6 +46,7 @@ VARIANTS = {
     "asymmetric": "Muhammad_Seal_asymmetric.png",
 }
 DEFAULT = "impression"
+MIXED = "mixed"
 LINES = ("allah", "rasul", "muhammad")
 
 FACE_MM = 17.0
@@ -161,10 +163,16 @@ def name_pieces(pieces: list[Polygon]) -> dict[str, Polygon]:
 
 
 def apply_layout(pieces: dict[str, Polygon], layout: dict) -> dict[str, Polygon]:
-    """Move, turn and scale each piece about its own centroid."""
+    """Thicken, move, turn and scale each piece about its own centroid.
+
+    "bold" grows a piece's strokes by that many mm, to match pieces taken from
+    a rendering with a heavier hand.
+    """
     out = {}
     for name, p in pieces.items():
         t = layout.get(name, {})
+        if t.get("bold"):
+            p = p.buffer(t["bold"], quad_segs=12)
         c = p.centroid
         q = affinity.scale(p, t.get("scale", 1.0), t.get("scale", 1.0), origin=c)
         q = affinity.rotate(q, t.get("rotate", 0.0), origin=c)
@@ -234,30 +242,44 @@ def preview(pieces: dict[str, Polygon], field: Polygon, path: Path, labels: bool
 
 def variant_sheet(out: Path, px: int = 450) -> None:
     """The variant previews side by side, ending with the original ring's face."""
-    tiles = [cv2.resize(cv2.imread(str(out / f"inscription-{n}.png")), (px, px)) for n in VARIANTS]
+    tiles = [cv2.resize(cv2.imread(str(out / f"inscription-{n}.png")), (px, px)) for n in [*VARIANTS, MIXED]]
     original = cv2.imread(str(ROOT / "reference" / "02-face-inscription.jpg"))[960:1340, 470:850]
     tiles.append(cv2.resize(original, (px, px)))
     cv2.imwrite(str(out / "inscription-variants.jpg"), np.hstack(tiles))
 
 
-def face_for(variant: str, layout: dict) -> tuple[dict[str, Polygon], Polygon]:
+def traced(variant: str) -> tuple[dict[str, Polygon], Polygon]:
+    """One rendering's pieces, castable and named, before any layout, and its seal outline."""
     letters, seal = fit_to_face(*trace(SEALS / VARIANTS[variant]))
-    pieces = apply_layout(name_pieces(make_castable(letters)), layout.get(variant, {}))
-    return pieces, field_outline(seal)
+    return name_pieces(make_castable(letters)), seal
+
+
+def face_for(variant: str, layout: dict) -> tuple[dict[str, Polygon], Polygon]:
+    """Laid-out pieces and the field outline for a rendering, or for MIXED.
+
+    MIXED takes each piece from the rendering its layout entry names in "from",
+    so letters can be matched across sources. Its field is DEFAULT's.
+    """
+    if variant != MIXED:
+        pieces, seal = traced(variant)
+        return apply_layout(pieces, layout.get(variant, {})), field_outline(seal)
+    spec = layout[MIXED]
+    sources = {v: traced(v) for v in {t["from"] for t in spec.values()} | {DEFAULT}}
+    pieces = {name: sources[t["from"]][0][name] for name, t in spec.items()}
+    return apply_layout(pieces, spec), field_outline(sources[DEFAULT][1])
 
 
 def main() -> None:
-    variant = sys.argv[1] if len(sys.argv) > 1 else DEFAULT
+    variant = sys.argv[1] if len(sys.argv) > 1 else MIXED
     layout = json.loads(LAYOUT.read_text()) if LAYOUT.exists() else {}
     out = ROOT / "extracted"
-    for name in VARIANTS:
+    for name in [*VARIANTS, MIXED]:
         preview(*face_for(name, layout), out / f"inscription-{name}.png")
     variant_sheet(out)
     pieces, field = face_for(variant, layout)
     preview(pieces, field, out / "inscription-labelled.png", labels=True)
     data = {
         "face_mm": FACE_MM,
-        "source": VARIANTS[variant],
         "variant": variant,
         "field": ring_json(field.exterior),
         "letters": [{"name": n, "outline": ring_json(p.exterior), "holes": [ring_json(h) for h in p.interiors]}

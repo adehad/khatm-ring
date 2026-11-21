@@ -40,12 +40,20 @@ Each connected letter group is a piece: `allah_1`, `allah_2`, `rasul_1` to `rasu
 
 To rebalance the pieces, either:
 
-- edit `design/inscription-layout.json` (`dx` and `dy` in mm, `rotate` in degrees, `scale`), or
+- edit `design/inscription-layout.json` (`dx` and `dy` in mm, `rotate` in degrees, `scale`, `bold` in mm), or
 - drag them in Blender. Send `exec(open(r"scripts/live_letters.py").read()); show()` to lay the pieces over the face, move them in top view, then send `read_back()`.
 
 Then run `uv run scripts/inscription.py` and rebuild. It warns when two pieces come within 0.35 mm of each other or of the rim.
 
-Three source renderings are wired in: `canonical`, `impression` (default, the most hand-cut) and `asymmetric`. `uv run scripts/inscription.py asymmetric` switches; `extracted/inscription-variants.jpg` compares them with the original ring.
+Three source renderings are wired in: `canonical`, `impression` (the most hand-cut) and `asymmetric`. The default, `mixed`, takes each piece from the rendering named by its `from` key in the layout's `mixed` entry:
+
+| Piece | From | Why |
+|---|---|---|
+| `allah_1`, `allah_2` | `impression` | The heavy, hand-cut الله |
+| `rasul_1` to `rasul_3` | `asymmetric` | A curved ر, a hooked ل and a و with a tail |
+| `muhammad_1` | `asymmetric` | Two even, round meems and a clear ح |
+
+`bold` in a piece's entry thickens its strokes, so the thinner `asymmetric` letters match the weight of الله. `uv run scripts/inscription.py asymmetric` uses one rendering throughout; `extracted/inscription-variants.jpg` compares all four with the original ring.
 
 ## Form
 
