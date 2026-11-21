@@ -11,6 +11,7 @@ if SCRIPTS not in sys.path:
 import build_ring  # noqa: E402
 
 importlib.reload(build_ring)
+build_ring.register()
 stats = build_ring.run(render=False)
 
 ring = bpy.data.objects["khatm_ring"]

@@ -9,10 +9,11 @@ a distance field, and they are combined with smooth unions and subtractions.
 Joins therefore blend by construction: no welding, no smoothing afterwards, no
 seams where a smoothing zone ends.
 
-    uv run scripts/ring_sdf.py [--voxel 0.05] [--w-end 3.4] [--solve] [--out model/body.ply]
+    uv run scripts/ring_sdf.py [--size "US 9"] [--target-g 5.8] [--solve] [--voxel 0.05] [--out model/body.ply]
 
-`--solve` finds the band's end width that meets TARGET_G before meshing. Prints
-one JSON line of stats on stdout.
+The size and target weight come from design/ring.toml unless given here.
+`--solve` finds the band's end width that meets the target weight before
+meshing. Prints one JSON line of stats on stdout.
 
 Units are millimetres. The finger runs along +Y, the face looks up +Z.
 Sizes are estimates from the reference photos; the constants are the knobs.
@@ -20,7 +21,7 @@ Sizes are estimates from the reference photos; the constants are the knobs.
 
 import argparse
 import json
-import struct
+import tomllib
 from pathlib import Path
 
 import cv2
@@ -28,16 +29,18 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 from skimage.measure import marching_cubes
 
+from ring_size import equivalents, inside_diameter
+
 ROOT = Path(__file__).resolve().parent.parent
 INSCRIPTION = ROOT / "extracted" / "face-inscription.json"
+PARAMS = ROOT / "design" / "ring.toml"
 
 # Two shar'i dirhams at 2.975 g each is 5.95 g, the Maliki limit for a man's
-# silver ring. The target leaves margin for the disputed dirham weight.
-TARGET_G = 5.8
+# silver ring. design/ring.toml sets the target below it, for the disputed
+# dirham weight.
 DENSITY_G_MM3 = 0.01036  # sterling silver, 925
 
 FACE_D = 17.0
-INNER_D = 19.0
 RELIEF = 0.6
 CROWN_R = 0.45
 HEAD_FLARE = 0.35
@@ -52,6 +55,7 @@ LETTER_ROUND = 0.18
 
 BAND_T_ROOT = 1.3
 BAND_T_END = 0.95
+BAND_T_END_RANGE = (0.8, 1.3)
 BAND_W_ROOT = 8.5
 BAND_W_END = 3.4
 BAND_W_END_RANGE = (2.6, 5.0)
@@ -75,12 +79,20 @@ K_CAVITY_CORNER = 0.35
 K_RECESS = 0.08
 K_LETTER = 0.1
 
-R_FINGER = INNER_D / 2
-R_SADDLE = R_FINGER + BAND_T_ROOT / 2
-Z_TOP = R_FINGER + BAND_T_ROOT + 1.4
-Z_FIELD = Z_TOP - RELIEF
-
 RASTER = 0.01
+
+
+def set_size(inner_d):
+    """Fix the finger size; every height on the ring is measured from it."""
+    global INNER_D, R_FINGER, R_SADDLE, Z_TOP, Z_FIELD
+    INNER_D = inner_d
+    R_FINGER = inner_d / 2
+    R_SADDLE = R_FINGER + BAND_T_ROOT / 2
+    Z_TOP = R_FINGER + BAND_T_ROOT + 1.4
+    Z_FIELD = Z_TOP - RELIEF
+
+
+set_size(19.0)
 
 
 # ---------------------------------------------------------------- field algebra
@@ -286,18 +298,32 @@ class Ring:
         return float(np.clip(0.5 - vol / h, 0.0, 1.0).sum() * h ** 3)
 
 
-def solve_w_end(ring, h=0.1):
-    target = TARGET_G / DENSITY_G_MM3
-    lo, hi = BAND_W_END_RANGE
-    a = (BAND_W_END, ring.volume_mm3(h, BAND_W_END))
-    b_w = BAND_W_END + (0.5 if a[1] < target else -0.5)
-    b = (b_w, ring.volume_mm3(h, b_w))
+def secant(volume, x0, step, bounds, target):
+    """Find x within bounds where volume(x) meets target, to within 1 mm³."""
+    a = (x0, volume(x0))
+    b_x = float(np.clip(x0 + (step if a[1] < target else -step), *bounds))
+    b = (b_x, volume(b_x))
     for _ in range(6):
         if abs(b[1] - target) < 1.0 or b[1] == a[1]:
             break
-        w = float(np.clip(b[0] - (b[1] - target) * (b[0] - a[0]) / (b[1] - a[1]), lo, hi))
-        a, b = b, (w, ring.volume_mm3(h, w))
-    return b[0]
+        x = float(np.clip(b[0] - (b[1] - target) * (b[0] - a[0]) / (b[1] - a[1]), *bounds))
+        a, b = b, (x, volume(x))
+    return b[0], b[1]
+
+
+def solve_band(ring, target_g, h=0.1):
+    """Meet the target weight with the band's end width; once that reaches its
+    limit, carry on with the end thickness. Returns (width, thickness)."""
+    global BAND_T_END
+    target = target_g / DENSITY_G_MM3
+    w, v = secant(lambda w: ring.volume_mm3(h, w), BAND_W_END, 0.5, BAND_W_END_RANGE, target)
+    if abs(v - target) > 1.0 and w in BAND_W_END_RANGE:
+        def volume(t):
+            global BAND_T_END
+            BAND_T_END = t
+            return ring.volume_mm3(h, w)
+        BAND_T_END, _ = secant(volume, BAND_T_END, 0.1, BAND_T_END_RANGE, target)
+    return w, BAND_T_END
 
 
 def write_ply(path, verts, normals, faces):
@@ -316,15 +342,19 @@ def write_ply(path, verts, normals, faces):
 
 
 def main():
+    params = tomllib.loads(PARAMS.read_text(encoding="utf-8"))
     ap = argparse.ArgumentParser()
+    ap.add_argument("--size", default=params["size"])
+    ap.add_argument("--target-g", type=float, default=params["target_g"])
     ap.add_argument("--voxel", type=float, default=0.05)
     ap.add_argument("--w-end", type=float, default=BAND_W_END)
     ap.add_argument("--solve", action="store_true")
     ap.add_argument("--out", default=str(ROOT / "model" / "body.ply"))
     a = ap.parse_args()
 
+    set_size(inside_diameter(a.size))
     ring = Ring()
-    w_end = solve_w_end(ring) if a.solve else a.w_end
+    w_end, t_end = solve_band(ring, a.target_g) if a.solve else (a.w_end, BAND_T_END)
     vol, origin = ring.volume_field(a.voxel, w_end)
     verts, faces, normals, _ = marching_cubes(vol, level=0.0, spacing=(a.voxel,) * 3)
     verts += np.asarray(origin, np.float32)
@@ -333,15 +363,18 @@ def main():
     write_ply(a.out, verts, -normals, faces)
     v = float(np.clip(0.5 - vol / a.voxel, 0.0, 1.0).sum() * a.voxel ** 3)
     stats = {
+        "size": equivalents(INNER_D),
+        "target_g": a.target_g,
         "volume_mm3": round(v, 1),
         "grams_925": round(v * DENSITY_G_MM3, 3),
         "band_end_width_mm": round(w_end, 2),
+        "band_end_thickness_mm": round(t_end, 2),
         "z_field": Z_FIELD,
         "faces": int(len(faces)),
         "mesh": a.out,
     }
-    if w_end in BAND_W_END_RANGE:
-        stats["warning"] = f"band end width hit its limit {w_end} mm"
+    if a.solve and abs(stats["grams_925"] - a.target_g) > 0.05:
+        stats["warning"] = f"cannot reach {a.target_g} g at this size: band ends {w_end:.2f} x {t_end:.2f} mm"
     print(json.dumps(stats))
 
 

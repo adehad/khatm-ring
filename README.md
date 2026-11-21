@@ -10,10 +10,27 @@ A silver seal ring (khatm) modelled in Blender for casting. The round face carri
 |---|---|
 | `reference/` | Photos of the original ring |
 | `reference/seal/` | Public-domain renderings of the seal the letters are traced from, with `SOURCES.md` |
+| `design/ring.toml` | Ring size and target weight, the model's driving parameters |
 | `design/inscription-layout.json` | Hand-tuned position, turn and scale of each letter piece |
 | `extracted/` | Ring cut out of each photo, and the laid-out inscription |
 | `scripts/` | Extraction, inscription and Blender scripts |
 | `model/` | Blender file, STL, GLB and renders |
+
+## Parameters
+
+`design/ring.toml` holds the two values the model is driven by, like a design table:
+
+| Key | Example | Effect |
+|---|---|---|
+| `size` | `"US 9"`, `"UK R1/2"`, `"EU 59"`, `"19 mm"` | Inside diameter. Every height on the ring is measured from the finger |
+| `target_g` | `5.8` | Grams of sterling. The solver sizes the band ends to meet it |
+
+Change them in either place:
+
+- Edit the file and rebuild.
+- In the live Blender, use the **Khatm** tab in the 3D view's sidebar (N). It shows the size on each scale, saves to `design/ring.toml` and rebuilds.
+
+`ring_sdf.py --size "UK P" --target-g 5.5` overrides the file for one run. `scripts/ring_size.py` holds the size scales; they follow jewellers' charts, so check against a real sizer.
 
 ## Inscription
 
@@ -50,7 +67,12 @@ The model is sized to **5.80 g in sterling silver**, under the Maliki limit for 
 | Target, `TARGET_G` | 5.80 g | margin for the dirham dispute and for density |
 | Sterling 925 density, `DENSITY_G_MM3` | 10.36 g/cm³ | fine silver is about 10.49 |
 
-`ring_sdf.py --solve` adjusts only the band's end width until the volume meets the target, so the shoulder flare is kept. It counts metal on a 0.1 mm grid in seconds, then meshes at 0.05 mm. Weigh the real casting: sprue position, porosity and polishing all move it.
+`ring_sdf.py --solve` changes the band's ends only, so the head and shoulders keep their shape:
+
+1. It widens or narrows the ends within `BAND_W_END_RANGE`.
+2. If the width hits its limit, it thickens or thins them within `BAND_T_END_RANGE`. Small sizes need this: at US 6 the ends come out 5.0 mm wide and 1.16 mm thick.
+
+It counts metal on a 0.1 mm grid in seconds, then meshes at 0.05 mm. The build warns if neither lever reaches the target. Weigh the real casting: sprue position, porosity and polishing all move it.
 
 ## Casting
 

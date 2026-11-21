@@ -8,12 +8,17 @@ Headless:
     blender -b -P scripts/build_ring.py -- [--render]
 Live, in a Blender running the BlenderMCP add-on:
     python scripts/blender_live.py scripts/live_build.py
+
+The live build also adds a "Khatm" tab to the 3D view's sidebar, where the
+ring size and target weight in design/ring.toml can be changed and rebuilt.
 """
 
 import json
 import math
+import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import bmesh
@@ -21,7 +26,12 @@ import bpy
 from mathutils import Vector
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+from ring_size import equivalents, inside_diameter  # noqa: E402
+
 OUT = ROOT / "model"
+PARAMS = ROOT / "design" / "ring.toml"
 BODY = OUT / "body.ply"
 KEEP_COLLECTION = "inscription"
 DECIMATE_RATIO = 0.25
@@ -228,6 +238,81 @@ def run(render: bool = False) -> dict:
         render_views()
     bpy.ops.wm.save_as_mainfile(filepath=str(OUT / "khatm-ring.blend"))
     return stats
+
+
+# ---------------------------------------------------------------- parameters panel
+
+
+def read_params() -> dict:
+    return tomllib.loads(PARAMS.read_text(encoding="utf-8"))
+
+
+def write_params(size: str, target_g: float) -> None:
+    """Change the values in design/ring.toml, keeping its comments."""
+    text = PARAMS.read_text(encoding="utf-8")
+    text = re.sub(r"(?m)^size = .*$", f"size = {json.dumps(size)}", text)
+    text = re.sub(r"(?m)^target_g = .*$", f"target_g = {target_g:g}", text)
+    PARAMS.write_text(text, encoding="utf-8")
+
+
+class KHATM_OT_rebuild(bpy.types.Operator):
+    """Save the size and weight to design/ring.toml, then rebuild the ring (a few minutes)"""
+
+    bl_idname = "khatm.rebuild"
+    bl_label = "Rebuild ring"
+
+    def execute(self, context):
+        scene = context.scene
+        try:
+            inside_diameter(scene.khatm_size)
+        except ValueError as err:
+            self.report({"ERROR"}, str(err))
+            return {"CANCELLED"}
+        write_params(scene.khatm_size, scene.khatm_target_g)
+        stats = run()
+        scene.khatm_result = (f"{stats['grams_925']:.2f} g, band ends {stats['band_end_width_mm']}"
+                              f" x {stats['band_end_thickness_mm']} mm"
+                              + (f"  ({stats['warning']})" if "warning" in stats else ""))
+        return {"FINISHED"}
+
+
+class KHATM_PT_params(bpy.types.Panel):
+    bl_label = "Khatm ring"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Khatm"
+
+    def draw(self, context):
+        scene = context.scene
+        col = self.layout.column()
+        col.prop(scene, "khatm_size")
+        try:
+            e = equivalents(inside_diameter(scene.khatm_size))
+            col.label(text=f"{e['diameter_mm']} mm  US {e['US']}  UK {e['UK']}  EU {e['EU']}")
+        except ValueError:
+            col.label(text="Try US 9, UK R1/2, EU 59 or 19 mm", icon="ERROR")
+        col.prop(scene, "khatm_target_g")
+        col.operator(KHATM_OT_rebuild.bl_idname)
+        if scene.khatm_result:
+            col.label(text=scene.khatm_result)
+
+
+CLASSES = (KHATM_OT_rebuild, KHATM_PT_params)
+
+
+def register() -> None:
+    """Add the sidebar panel. Safe to call again after reloading this module."""
+    for cls in CLASSES:
+        old = getattr(bpy.types, cls.__name__, None)
+        if old is not None:
+            bpy.utils.unregister_class(old)
+        bpy.utils.register_class(cls)
+    params = read_params()
+    bpy.types.Scene.khatm_size = bpy.props.StringProperty(
+        name="Size", default=params["size"], description="US 9, UK R1/2, EU 59, or inside diameter as 19 mm")
+    bpy.types.Scene.khatm_target_g = bpy.props.FloatProperty(
+        name="Target weight (g)", default=params["target_g"], min=3.0, max=12.0, step=5, precision=2)
+    bpy.types.Scene.khatm_result = bpy.props.StringProperty(name="Last build")
 
 
 if __name__ == "__main__":
