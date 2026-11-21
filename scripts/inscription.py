@@ -2,189 +2,272 @@
 # requires-python = ">=3.11,<3.13"
 # dependencies = ["opencv-python-headless", "numpy", "shapely"]
 # ///
-"""The seal inscription, redrawn as even-width strokes, written out for Blender.
+"""Lift the seal inscription from a reference rendering and lay it out on the ring face.
 
-Coordinates are on a 1000 x 1000 square inscribed in the bezel's outer edge,
-y down, laid over the rectified photo `extracted/face-crop.png`. Every letter
-is a centreline swept with a round pen, so stroke width, terminals and joins
-are uniform. That keeps every section castable: no hairlines, no pinholes.
+The references in `reference/seal/` are public-domain renderings of the prophetic
+seal: white letters on a dark seal. Their outlines keep the calligraphy's
+thick-thin strokes and tapered ends, so they are traced as they are, not redrawn.
+For casting, the letters are emboldened to the stroke weight of the original
+ring and any tip too fine to fill is rounded off.
+
+Each connected letter group is a named piece (`allah_1` is the rightmost piece of
+the top line, and so on). `design/inscription-layout.json` moves, turns and
+scales each piece; edit it by hand, or drag the pieces in Blender with
+`live_letters.py` and read them back.
+
+    uv run scripts/inscription.py [variant]        variant: one of VARIANTS, default DEFAULT
 
 Outputs in `extracted/`:
-  face-inscription.json  letter and back-pocket outlines in mm, read by `build_ring.py`
-  face-inscription.svg   the same outlines, for any vector tool
-  face-overlay.png       outlines over the photo, to check the drawing
+  face-inscription.json   laid-out pieces in mm, read by `build_ring.py`
+  face-inscription.svg    one <g> per piece, for any vector tool
+  inscription-<variant>.png   preview of each variant with the layout applied
+  inscription-variants.jpg    those previews beside the original ring's face
+  inscription-labelled.png    the chosen variant with piece names
 """
 
 import json
+import sys
 from pathlib import Path
 
+import cv2
 import numpy as np
+from shapely import affinity, minimum_bounding_circle, minimum_bounding_radius
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
 ROOT = Path(__file__).resolve().parent.parent
-SIZE = 1000
-CENTRE = (500, 500)
+SEALS = ROOT / "reference" / "seal"
+LAYOUT = ROOT / "design" / "inscription-layout.json"
+
+VARIANTS = {
+    "canonical": "Muhammad_Seal.png",
+    "impression": "Seal_of_Muhammad.png",
+    "asymmetric": "Muhammad_Seal_asymmetric.png",
+}
+DEFAULT = "impression"
+LINES = ("allah", "rasul", "muhammad")
+
 FACE_MM = 17.0
-
-PEN = 72
-FIELD_R = 432
-LAYOUT_SCALE = 0.86
-COUNTER_R = 28
-POCKET_INSET_MM = 0.3
-POCKET_MIN_HALF_MM = 0.25
-
-
-def fit(p):
-    """Pull a drawing point towards the centre so the inscription clears the rim."""
-    return (CENTRE[0] + (p[0] - CENTRE[0]) * LAYOUT_SCALE, CENTRE[1] + (p[1] - CENTRE[1]) * LAYOUT_SCALE)
+FIELD_R_MM = 7.3
+FIELD_WOBBLE_MM = 0.3
+RIM_GAP_MM = 0.25
+PIECE_GAP_MM = 0.35
+BOLD_MM = 0.18
+MIN_FEATURE_MM = 0.4
+MIN_COUNTER_MM = 0.6
 
 
-def smooth(pts, samples=10):
-    """Open Catmull-Rom through the points, so a stroke bends instead of kinking."""
-    p = np.asarray([pts[0], *pts, pts[-1]], dtype=float)
-    out = []
-    for i in range(1, len(p) - 2):
-        p0, p1, p2, p3 = p[i - 1], p[i], p[i + 1], p[i + 2]
-        for t in np.linspace(0, 1, samples, endpoint=False):
-            out.append(
-                0.5
-                * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t**3)
-            )
-    out.append(p[-2])
-    return [tuple(q) for q in out]
+def trace(image: Path) -> tuple[MultiPolygon, Polygon]:
+    """White letters inside the dark seal, and the seal's own outline, in pixel coordinates."""
+    rgba = cv2.imread(str(image), cv2.IMREAD_UNCHANGED)
+    if rgba.shape[2] == 4:
+        a = rgba[..., 3:4] / 255.0
+        rgb = (rgba[..., :3] * a + 255 * (1 - a)).astype(np.uint8)
+    else:
+        rgb = rgba
+    dark = (cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY) < 128).astype(np.uint8)
+    seal = max(cv2.findContours(dark, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[0], key=cv2.contourArea)
+    inside = np.zeros_like(dark)
+    cv2.drawContours(inside, [seal], -1, 1, -1)
+    letters = (inside & (1 - dark)) * 255
+
+    cnts, hier = cv2.findContours(letters, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    polys = []
+    for i, c in enumerate(cnts):
+        if hier[0][i][3] != -1 or len(c) < 4:
+            continue
+        holes = []
+        child = hier[0][i][2]
+        while child != -1:
+            if len(cnts[child]) >= 4:
+                holes.append(cnts[child][:, 0, :])
+            child = hier[0][child][0]
+        polys.append(Polygon(c[:, 0, :], holes).buffer(0))
+    return MultiPolygon([p for p in polys if p.area > 30]), Polygon(seal[:, 0, :]).buffer(0)
 
 
-def stroke(*pts, w=PEN):
-    line = smooth(pts) if len(pts) > 2 else list(pts)
-    return LineString([fit(p) for p in line]).buffer(w / 2, quad_segs=24)
+def fit_to_face(letters: MultiPolygon, seal: Polygon) -> tuple[MultiPolygon, Polygon]:
+    """Move both to mm, y up, centred on the letters, scaled so the letters fill the field."""
+    letters, seal = (affinity.scale(g, 1, -1, origin=(0, 0)) for g in (letters, seal))
+    centre = minimum_bounding_circle(letters).centroid
+    letters, seal = (affinity.translate(g, -centre.x, -centre.y) for g in (letters, seal))
+    k = (FIELD_R_MM - FIELD_WOBBLE_MM - RIM_GAP_MM - BOLD_MM) / minimum_bounding_radius(letters)
+    return tuple(affinity.scale(g, k, k, origin=(0, 0)) for g in (letters, seal))
 
 
-def blob(c, r):
-    return Point(fit(c)).buffer(r, quad_segs=32)
+def field_outline(seal: Polygon, n: int = 360) -> Polygon:
+    """Inner edge of the rim, with the hand-cut wobble of the seal's own border.
+
+    The seal outline's radius is read all round the centre, smoothed, and its
+    deviation from the median capped at FIELD_WOBBLE_MM about FIELD_R_MM.
+    """
+    edge = seal.exterior
+    angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    far = 4 * FIELD_R_MM * 10
+    radii = []
+    for a in angles:
+        ray = LineString([(0, 0), (far * np.cos(a), far * np.sin(a))])
+        hit = ray.intersection(edge)
+        pts = getattr(hit, "geoms", [hit])
+        radii.append(max(Point(0, 0).distance(p) for p in pts))
+    r = np.asarray(radii)
+    kernel = np.ones(5) / 5
+    r = np.convolve(np.concatenate([r[-2:], r, r[:2]]), kernel, mode="valid")
+    dev = r - np.median(r)
+    dev *= FIELD_WOBBLE_MM / np.abs(dev).max()
+    rr = FIELD_R_MM + dev
+    return Polygon(np.column_stack([rr * np.cos(angles), rr * np.sin(angles)]))
 
 
-def loop(c, r):
-    """Disc of a looped letter; its counter is cut once the word is assembled."""
-    return blob(c, r)
+def make_castable(shapes: MultiPolygon) -> list[Polygon]:
+    """Embolden, then round off anything narrower than MIN_FEATURE_MM.
 
-
-def word(parts, counters):
-    shape = unary_union(parts)
+    The opening (shrink then grow) only touches features thinner than the
+    feature size, so tapered tips end in a small round instead of a needle.
+    """
+    smooth = shapes.buffer(0.03, quad_segs=8).buffer(-0.03, quad_segs=8)
+    bold = smooth.buffer(BOLD_MM, quad_segs=12)
+    r = MIN_FEATURE_MM / 2
+    opened = bold.buffer(-r, quad_segs=12).buffer(r, quad_segs=12)
+    # Keep the tips the opening cut back, as far as a 0.25 mm round reaches.
+    tips = bold.difference(opened).buffer(-0.12, quad_segs=8).buffer(0.12, quad_segs=8)
+    out = unary_union([opened, tips])
+    # Emboldening closes the counters of ه, و and م; cut them back at their drawn
+    # size, opened up to MIN_COUNTER_MM so investment can fill them.
+    counters = [Polygon(h) for p in shapes.geoms for h in p.interiors]
     for c in counters:
-        shape = shape.difference(blob(c, COUNTER_R))
-    return shape
+        grow = max(0.0, MIN_COUNTER_MM / 2 - np.sqrt(c.area / np.pi))
+        out = out.difference(c.buffer(grow, quad_segs=12))
+    out = out.simplify(0.01)
+    geoms = out.geoms if isinstance(out, MultiPolygon) else [out]
+    return [g for g in geoms if g.area > 0.05]
 
 
-def word_allah():
-    alif = stroke((672, 96), (668, 282))
-    lam1 = stroke((430, 84), (432, 254))
-    lam2 = stroke((536, 74), (542, 254))
-    base = stroke((300, 274), (450, 272), (550, 260))
-    ha = loop((308, 222), 68)
-    hook = stroke((292, 168), (322, 140), (358, 128))
-    return [alif, word([lam1, lam2, base, ha, hook], [(308, 222)])]
+def name_pieces(pieces: list[Polygon]) -> dict[str, Polygon]:
+    """Group pieces into lines top to bottom, then number each line right to left."""
+    pieces = sorted(pieces, key=lambda p: -p.centroid.y)
+    lines: list[list[Polygon]] = []
+    for p in pieces:
+        if lines and abs(lines[-1][-1].centroid.y - p.centroid.y) < 1.6:
+            lines[-1].append(p)
+        else:
+            lines.append([p])
+    named = {}
+    for i, line in enumerate(lines):
+        word = LINES[i] if len(lines) == len(LINES) else f"line{i + 1}"
+        for k, p in enumerate(sorted(line, key=lambda q: -q.centroid.x), start=1):
+            named[f"{word}_{k}"] = p
+    return named
 
 
-def word_rasul():
-    ra = stroke((826, 362), (818, 488), w=80)
-    lam = stroke((152, 344), (168, 420), (162, 520), (148, 616))
-    base = stroke((278, 566), (480, 542), (690, 496))
-    teeth = [stroke((450, 534), (448, 436)), stroke((566, 514), (564, 424))]
-    sad = stroke((668, 494), (700, 426), (716, 420), w=86)
-    waw = loop((304, 472), 64)
-    return [ra, lam, word([base, *teeth, sad, waw], [(304, 472)])]
-
-
-def word_muhammad():
-    mim1 = loop((736, 652), 68)
-    neck = stroke((686, 690), (620, 718))
-    ha_diag = stroke((616, 724), (690, 766), (762, 808))
-    ha_base = stroke((584, 818), (680, 820), (768, 814))
-    mim2 = loop((505, 776), 60)
-    dal = stroke((268, 694), (300, 708), (372, 710), (452, 742))
-    tail = stroke((456, 816), (380, 838), (300, 850), (266, 840))
-    return [word([mim1, neck, ha_diag, ha_base, mim2, dal, tail], [(736, 652), (505, 776)])]
-
-
-def letters() -> MultiPolygon:
-    shapes = unary_union(word_allah() + word_rasul() + word_muhammad())
-    polys = shapes.geoms if isinstance(shapes, MultiPolygon) else [shapes]
-    # Where strokes cross they can trap slivers smaller than a counter: fill them,
-    # they would only trap investment in the casting.
-    min_hole = 0.8 * np.pi * COUNTER_R**2
-    clean = [Polygon(p.exterior, [h for h in p.interiors if Polygon(h).area > min_hole]) for p in polys]
-    return MultiPolygon(clean)
-
-
-def to_mm(x: float, y: float) -> tuple[float, float]:
-    return ((x - CENTRE[0]) / SIZE * FACE_MM, -(y - CENTRE[1]) / SIZE * FACE_MM)
-
-
-def polygons_json(shapes: MultiPolygon, tolerance: float = 0.6) -> list[dict]:
-    out = []
-    for poly in shapes.geoms:
-        poly = poly.simplify(tolerance)
-        out.append(
-            {
-                "outline": [to_mm(x, y) for x, y in list(poly.exterior.coords)[:-1]],
-                "holes": [[to_mm(x, y) for x, y in list(h.coords)[:-1]] for h in poly.interiors],
-            }
-        )
+def apply_layout(pieces: dict[str, Polygon], layout: dict) -> dict[str, Polygon]:
+    """Move, turn and scale each piece about its own centroid."""
+    out = {}
+    for name, p in pieces.items():
+        t = layout.get(name, {})
+        c = p.centroid
+        q = affinity.scale(p, t.get("scale", 1.0), t.get("scale", 1.0), origin=c)
+        q = affinity.rotate(q, t.get("rotate", 0.0), origin=c)
+        out[name] = affinity.translate(q, t.get("dx", 0.0), t.get("dy", 0.0))
     return out
 
 
-def svg(shapes: MultiPolygon) -> str:
+def clearances(pieces: dict[str, Polygon], field: Polygon) -> list[str]:
+    """Warnings for pieces that crowd each other or the rim."""
+    warn = []
+    inside = field.buffer(-RIM_GAP_MM)
+    names = list(pieces)
+    for i, a in enumerate(names):
+        spill = pieces[a].difference(inside)
+        if not spill.is_empty:
+            depth = max(inside.exterior.distance(Point(xy)) for xy in pieces[a].exterior.coords
+                        if not inside.contains(Point(xy)))
+            warn.append(f"{a} is {depth:.2f} mm into the rim gap")
+        for b in names[i + 1:]:
+            gap = pieces[a].distance(pieces[b])
+            if gap < PIECE_GAP_MM:
+                warn.append(f"{a} and {b} are {gap:.2f} mm apart")
+    return warn
+
+
+def ring_json(ring) -> list:
+    return [(round(x, 4), round(y, 4)) for x, y in list(ring.coords)[:-1]]
+
+
+def svg(pieces: dict[str, Polygon], field: Polygon) -> str:
+    s = 1000 / FACE_MM
+
     def path(coords):
-        return "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in coords) + " Z"
+        return "M" + " L".join(f"{500 + x * s:.1f},{500 - y * s:.1f}" for x, y in coords) + " Z"
 
     body = [
-        f'<circle cx="{CENTRE[0]}" cy="{CENTRE[1]}" r="{SIZE / 2}" fill="none" stroke="black"/>',
-        f'<circle cx="{CENTRE[0]}" cy="{CENTRE[1]}" r="{FIELD_R}" fill="none" stroke="black"/>',
+        '<circle cx="500" cy="500" r="500" fill="none" stroke="black"/>',
+        f'<path id="field" d="{path(field.exterior.coords)}" fill="none" stroke="black"/>',
     ]
-    for p in shapes.geoms:
+    for name, p in pieces.items():
         d = " ".join(path(r.coords) for r in [p.exterior, *p.interiors])
-        body.append(f'<path d="{d}" fill-rule="evenodd"/>')
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{SIZE}" height="{SIZE}" '
-        f'viewBox="0 0 {SIZE} {SIZE}">\n' + "\n".join(body) + "\n</svg>\n"
-    )
+        body.append(f'<g id="{name}"><path d="{d}" fill-rule="evenodd"/></g>')
+    return ('<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000">\n'
+            + "\n".join(body) + "\n</svg>\n")
 
 
-def overlay(shapes: MultiPolygon, path: Path) -> None:
-    import cv2
+def preview(pieces: dict[str, Polygon], field: Polygon, path: Path, labels: bool = False, px: int = 700) -> None:
+    s = px / FACE_MM
+    img = np.full((px, px, 3), (22, 26, 30), np.uint8)
+    c = px // 2
 
-    img = cv2.resize(cv2.imread(str(ROOT / "extracted" / "face-crop.png")), (SIZE, SIZE))
-    paint = img.copy()
-    for p in shapes.geoms:
-        cv2.fillPoly(paint, [np.asarray(r.coords, np.int32) for r in [p.exterior, *p.interiors]], (0, 200, 255))
-    cv2.circle(paint, CENTRE, FIELD_R, (255, 0, 255), 3)
-    cv2.imwrite(str(path), cv2.addWeighted(img, 0.45, paint, 0.55, 0))
+    def pts(ring):
+        return np.asarray([(c + x * s, c - y * s) for x, y in ring.coords], np.int32)
+
+    cv2.circle(img, (c, c), c - 2, (205, 200, 200), -1, cv2.LINE_AA)
+    cv2.fillPoly(img, [pts(field.exterior)], (35, 40, 45), cv2.LINE_AA)
+    for name, p in pieces.items():
+        cv2.fillPoly(img, [pts(p.exterior)], (225, 222, 220), cv2.LINE_AA)
+        for h in p.interiors:
+            cv2.fillPoly(img, [pts(h)], (35, 40, 45), cv2.LINE_AA)
+        if labels:
+            q = p.representative_point()
+            cv2.putText(img, name, (int(c + q.x * s) - 30, int(c - q.y * s)), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45, (0, 90, 230), 1, cv2.LINE_AA)
+    cv2.imwrite(str(path), img)
+
+
+def variant_sheet(out: Path, px: int = 450) -> None:
+    """The variant previews side by side, ending with the original ring's face."""
+    tiles = [cv2.resize(cv2.imread(str(out / f"inscription-{n}.png")), (px, px)) for n in VARIANTS]
+    original = cv2.imread(str(ROOT / "reference" / "02-face-inscription.jpg"))[960:1340, 470:850]
+    tiles.append(cv2.resize(original, (px, px)))
+    cv2.imwrite(str(out / "inscription-variants.jpg"), np.hstack(tiles))
+
+
+def face_for(variant: str, layout: dict) -> tuple[dict[str, Polygon], Polygon]:
+    letters, seal = fit_to_face(*trace(SEALS / VARIANTS[variant]))
+    pieces = apply_layout(name_pieces(make_castable(letters)), layout.get(variant, {}))
+    return pieces, field_outline(seal)
 
 
 def main() -> None:
+    variant = sys.argv[1] if len(sys.argv) > 1 else DEFAULT
+    layout = json.loads(LAYOUT.read_text()) if LAYOUT.exists() else {}
     out = ROOT / "extracted"
-    shapes = letters()
-    # The back of the face plate is pocketed under each letter so the plate is one
-    # thickness throughout. The inset keeps a wall round each pocket.
-    inset = POCKET_INSET_MM / FACE_MM * SIZE
-    # Opening drops any sliver narrower than 2 * POCKET_MIN_HALF_MM: it would not
-    # fill with investment and would self-intersect when its edges are rounded.
-    half = POCKET_MIN_HALF_MM / FACE_MM * SIZE
-    pockets = shapes.buffer(-inset - half, quad_segs=16).buffer(half, quad_segs=16)
-    pockets = pockets if isinstance(pockets, MultiPolygon) else MultiPolygon([pockets])
-    pockets = MultiPolygon([p for p in pockets.geoms if p.area > (2 * inset) ** 2])
+    for name in VARIANTS:
+        preview(*face_for(name, layout), out / f"inscription-{name}.png")
+    variant_sheet(out)
+    pieces, field = face_for(variant, layout)
+    preview(pieces, field, out / "inscription-labelled.png", labels=True)
     data = {
         "face_mm": FACE_MM,
-        "field_radius_mm": FIELD_R / SIZE * FACE_MM,
-        "letters": polygons_json(shapes),
-        "pockets": polygons_json(pockets),
+        "source": VARIANTS[variant],
+        "variant": variant,
+        "field": ring_json(field.exterior),
+        "letters": [{"name": n, "outline": ring_json(p.exterior), "holes": [ring_json(h) for h in p.interiors]}
+                    for n, p in pieces.items()],
     }
     (out / "face-inscription.json").write_text(json.dumps(data, indent=1))
-    (out / "face-inscription.svg").write_text(svg(shapes))
-    overlay(shapes, out / "face-overlay.png")
-    pen_mm = PEN / SIZE * FACE_MM
-    print(f"{len(shapes.geoms)} letter shapes, pen {pen_mm:.2f} mm, counters {2 * COUNTER_R / SIZE * FACE_MM:.2f} mm")
+    (out / "face-inscription.svg").write_text(svg(pieces, field))
+    print(f"{variant}: {', '.join(pieces)}")
+    for w in clearances(pieces, field):
+        print("  warning:", w)
 
 
 if __name__ == "__main__":
