@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      try {
+        document.querySelector('meta[name="color-scheme"]').content =
+          localStorage.getItem("color-scheme") ?? "light dark";
+      } catch {}
+    </script>
+    <title>Khatm ring</title>
+    <link rel="icon" href="data:," />
+    <meta name="description" content="An interactive 3D model of a sterling silver seal ring." />
+    <link id="model" rel="preload" href="khatm-ring.stl.xz" as="fetch" crossorigin="anonymous" />
+    <link rel="stylesheet" href="./src/style.css" />
+    <script type="module" src="./src/main.ts"></script>
+  </head>
+  <body>
+    <canvas
+      id="scene"
+      aria-label="Interactive 3D model of the khatm ring. Drag to turn, scroll or pinch to zoom."
+    ></canvas>
+
+    <header>
+      <h1>Khatm ring</h1>
+      <p>Sterling silver seal ring</p>
+      <p id="details"></p>
+      <p id="build"></p>
+    </header>
+
+    <p id="status" role="status">Loading model…</p>
+
+    <nav aria-label="Viewer controls">
+      <div class="group" role="group" aria-label="Views">
+        <button type="button" data-view="three-quarter">Three-quarter</button>
+        <button type="button" data-view="face">Face</button>
+        <button type="button" data-view="front">Front</button>
+        <button type="button" data-view="side">Side</button>
+        <button type="button" data-view="underside">Underside</button>
+      </div>
+      <div class="group">
+        <button type="button" id="spin" data-icon="spin" aria-pressed="true">Spin</button>
+        <button type="button" id="theme">
+          <span class="to-dark" data-icon="moon">Dark</span>
+          <span class="to-light" data-icon="sun">Light</span>
+        </button>
+        <button type="button" id="download" data-icon="download" disabled>STL</button>
+      </div>
+    </nav>
+
+    <p class="hint">Drag to turn · scroll or pinch to zoom · right-drag to pan</p>
+  </body>
+</html>

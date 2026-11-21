@@ -1,0 +1,27 @@
+repos:
+  - repo: local
+    hooks:
+      - id: oxfmt
+        name: oxfmt
+        entry: bun run --cwd site fmt
+        language: system
+        files: ^site/
+        pass_filenames: false
+      - id: oxlint
+        name: oxlint (type-aware)
+        entry: bun run --cwd site lint
+        language: system
+        files: ^site/
+        pass_filenames: false
+      - id: tsc
+        name: tsc
+        entry: bun run --cwd site typecheck
+        language: system
+        files: ^site/
+        pass_filenames: false
+      - id: bun-lock
+        name: bun.lock is current
+        entry: bun install --cwd site --frozen-lockfile
+        language: system
+        files: ^site/(package\.json|bun\.lock)$
+        pass_filenames: false
