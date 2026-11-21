@@ -40,8 +40,12 @@ FACE_D = 17.0
 INNER_D = 19.0
 RELIEF = 0.6
 CROWN_R = 0.45
-FOOT_R = 6.8
+HEAD_FLARE = 0.35
+HEAD_DROP = 6.0
+BOAT_EDGE = 0.9
+BOAT_POWER = 2.2
 WALL_T = 0.7
+CAVITY_LEAN = 0.6
 PLATE_RIM = 0.8
 PLATE_CENTRE = 0.6
 LETTER_ROUND = 0.18
@@ -65,6 +69,7 @@ OVERLAP_GAP = 0.35
 
 K_SHOULDER = 1.5
 K_SEAT = 0.6
+K_BOAT = 1.2
 K_LIP = 0.35
 K_CAVITY_CORNER = 0.35
 K_RECESS = 0.08
@@ -140,54 +145,54 @@ class Field2D:
         return d + over
 
 
-def bezier(p0, p1, p2, p3, n=40):
-    t = np.linspace(0, 1, n)[:, None]
-    return ((1 - t) ** 3 * p0 + 3 * (1 - t) ** 2 * t * p1 + 3 * (1 - t) * t * t * p2 + t ** 3 * p3).tolist()
+def head_radius(z):
+    """Radius of the head's wall at height z, and its slope. The wall drops from
+    the crown and leans out by HEAD_FLARE over HEAD_DROP as it meets the band."""
+    u = np.clip((Z_TOP - CROWN_R - z) / HEAD_DROP, 0.0, 1.0)
+    return FACE_D / 2 + HEAD_FLARE * u * u, 2 * HEAD_FLARE * u / HEAD_DROP
 
 
-def head_side():
-    """Outside of the head as (r, z) from the face edge down: a crown round, then
-    one curve that leaves the crown straight down and eases in to the foot."""
-    R = FACE_D / 2
-    a = np.linspace(np.pi / 2, 0, 10)
-    crown = np.column_stack([R - CROWN_R + CROWN_R * np.cos(a), Z_TOP - CROWN_R + CROWN_R * np.sin(a)]).tolist()
-    z0 = Z_TOP - CROWN_R
-    side = bezier(np.array([R, z0]), np.array([R, z0 - 1.2]), np.array([FOOT_R + 0.25, 9.7]), np.array([FOOT_R, 8.4]))
-    return crown + side[1:] + [[FOOT_R, 2.0]]
+def head(y, rho, z, rf):
+    """The head: a disc with a rounded crown whose wall runs down into the band.
+
+    Across the finger the wall meets the band outright. Along the finger, past
+    the band's edges, the underside follows the band's curve and rises to
+    BOAT_EDGE under the face edge, so from the side the head is boat-shaped.
+    """
+    r, slope = head_radius(z)
+    qx = (rho - r) / np.sqrt(1 + slope ** 2) + CROWN_R
+    qz = z - Z_TOP + CROWN_R
+    d = np.minimum(np.maximum(qx, qz), 0) + np.hypot(np.maximum(qx, 0), np.maximum(qz, 0)) - CROWN_R
+    y0 = BAND_W_ROOT / 2 - 0.6
+    u = np.clip((np.abs(y) - y0) / (FACE_D / 2 - y0), 0.0, 1.0)
+    floor = R_SADDLE + (Z_TOP - BOAT_EDGE - R_SADDLE) * u ** BOAT_POWER
+    d = smax(d, floor - rf, np.where(u > 0, K_BOAT, K_SEAT))
+    # Stop the wall a millimetre below where it meets the band, inside the band's metal.
+    r_wall = FACE_D / 2 + HEAD_FLARE
+    z_join = np.sqrt(max((R_FINGER + BAND_T_ROOT) ** 2 - r_wall ** 2, 0.0))
+    return np.maximum(d, z_join - 1.0 - z)
 
 
-def offset_inward(pts, d):
-    out = []
-    for i, (r, z) in enumerate(pts):
-        r0, z0 = pts[max(i - 1, 0)]
-        r1, z1 = pts[min(i + 1, len(pts) - 1)]
-        tr, tz = r1 - r0, z1 - z0
-        n = np.hypot(tr, tz) or 1.0
-        out.append([r + tz / n * d, z - tr / n * d])
-    return out
-
-
-def head_fields():
-    side = head_side()
-    outer = [[0.0, Z_TOP]] + side + [[0.0, side[-1][1]]]
-    head = Field2D([(outer, [])], 0.0, 11.0, 1.5, Z_TOP + 0.5)
-
-    # Cavity: the side wall offset in by WALL_T, under a domed ceiling that
-    # leaves PLATE_RIM of plate at its edge and PLATE_CENTRE in the middle.
-    # The ceiling is analytic: it is nearly flat, and a raster of it would
-    # step in 0.01 mm terraces that print as rings.
-    inner = offset_inward(side, WALL_T)
-    r_c = next(r for r, z in inner if z <= Z_FIELD - PLATE_RIM)
-    wall = [[r, z] for r, z in inner if z <= Z_FIELD]
-    walls = Field2D([([[0.0, Z_FIELD], *wall, [wall[-1][0], 1.0], [0.0, 1.0]], [])], 0.0, 11.0, 0.5, Z_TOP + 0.5)
+def cavity(rho, z):
+    """The open back: the head's wall offset in by WALL_T, under a domed ceiling
+    that leaves PLATE_RIM of plate at its edge and PLATE_CENTRE in the middle."""
+    r, slope = head_radius(z)
+    # Low down the wall leans out by CAVITY_LEAN and reaches the finger hole
+    # along its tangent, so the two run into each other without a ridge.
+    x_meet = FACE_D / 2 + HEAD_FLARE - WALL_T + CAVITY_LEAN
+    z_meet = np.sqrt(max(R_FINGER ** 2 - x_meet ** 2, 0.0))
+    if z_meet > 0:
+        span = 2 * CAVITY_LEAN * x_meet / z_meet
+        u = np.clip((z_meet + span - z) / span, 0.0, 1.0)
+        r = r + CAVITY_LEAN * u * u
+        slope = slope + 2 * CAVITY_LEAN * u / span
+    walls = (rho - (r - WALL_T)) / np.sqrt(1 + slope ** 2)
+    walls = np.maximum(walls, z_meet - 0.5 - z)
+    r_c = FACE_D / 2 - WALL_T
     dome = (PLATE_RIM - PLATE_CENTRE) / r_c ** 2
-
-    def cavity(rho, z):
-        ceiling = Z_FIELD - PLATE_CENTRE - dome * rho ** 2
-        under = (z - ceiling) / np.sqrt(1 + (2 * dome * rho) ** 2)
-        return smax(walls(rho, z), under, K_CAVITY_CORNER)
-
-    return head, cavity
+    ceiling = Z_FIELD - PLATE_CENTRE - dome * rho ** 2
+    under = (z - ceiling) / np.sqrt(1 + (2 * dome * rho) ** 2)
+    return smax(walls, under, K_CAVITY_CORNER)
 
 
 # ---------------------------------------------------------------- band
@@ -234,7 +239,6 @@ class Ring:
         data = json.loads(INSCRIPTION.read_text())
         if abs(data["face_mm"] - FACE_D) > 1e-6:
             raise ValueError("face-inscription.json was drawn for a different FACE_D; rerun inscription.py")
-        self.head, self.cavity = head_fields()
         self.field = Field2D([(data["field"], [])], -FACE_D / 2, FACE_D / 2, -FACE_D / 2, FACE_D / 2)
         self.letters = Field2D([(p["outline"], p["holes"]) for p in data["letters"]],
                                -FACE_D / 2, FACE_D / 2, -FACE_D / 2, FACE_D / 2)
@@ -243,13 +247,14 @@ class Ring:
         rho = np.hypot(x, y)
         rf = np.hypot(x, z)
 
-        body = smax(self.head(rho, z), R_SADDLE - rf, K_SEAT)
+        body = head(y, rho, z, rf)
         for sign, rides, phase in ((1, False, 0.0), (-1, True, 1.9)):
             d, theta = arm(x, y, z, sign, rides, w_end, phase)
-            k = K_SHOULDER * (1 - smoothstep((theta - 55.0) / 35.0))
+            # Full fillet on the outside; none at the finger, where it would swell into the hole.
+            k = K_SHOULDER * (1 - smoothstep((theta - 55.0) / 35.0)) * smoothstep((rf - R_FINGER) / BAND_T_ROOT)
             k = np.where(theta > 300.0, 0.0, k)
             body = smin(body, d, k)
-        body = smax(body, -self.cavity(rho, z), K_LIP)
+        body = smax(body, -cavity(rho, z), K_LIP)
 
         # Field recess: inside the hand-cut outline, widening at 45 degrees up to the rim.
         recess = np.maximum(Z_FIELD - z, (self.field(x, y) - (z - Z_FIELD)) * 0.7071)

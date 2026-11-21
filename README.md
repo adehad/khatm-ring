@@ -34,7 +34,7 @@ Three source renderings are wired in: `canonical`, `impression` (default, the mo
 
 `scripts/ring_sdf.py` models the whole ring as one signed distance field and meshes it once with marching cubes. Parts are joined with smooth unions, so every join is a fillet by construction:
 
-- **Head.** One curve runs from the crown round down into the foot. The head sits on a saddle cut to the band's curve, and its back is open, with a rolled lip and a domed ceiling.
+- **Head.** There is no ledge under the face. Across the finger, the wall drops from the crown round and leans out a little (`HEAD_FLARE`) until it runs into the band. Along the finger, the underside follows the band's curve and rises to the face edge, so from the side the head is a boat that narrows into the band. The back is open, with a rolled lip and a domed ceiling, and the hollow's wall meets the finger hole along its tangent.
 - **Band.** It flares to 8.5 mm wide and 1.3 mm thick under the head, along one eased curve for width and thickness. It then thins to rounded tips 0.9 mm thick, which you bend to size. A faint width wave keeps it from looking machined.
 - **Joins.** The shoulders blend into the head with a 1.5 mm fillet (`K_SHOULDER`). The fillet fades to nothing before the overlap, so the two ends never fuse.
 - **Face.** The rim's outer edge is a true circle. Its inner edge follows the hand-cut border of the seal reference, and a 45° bevel leads down into the oxidised field.
