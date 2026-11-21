@@ -1,6 +1,6 @@
 # khatm-ring
 
-A silver seal ring (khatm) modelled in Blender for casting. The round face carries the prophetic seal inscription, top to bottom, الله / رسول / محمد. The band is open and adjustable, with ends that overlap under the finger.
+A silver seal ring (khatm) modelled in Blender for casting. The round face carries the prophetic seal inscription, top to bottom, الله / رسول / محمد. The band is open: its ends overlap under the finger, and you size the ring by bending them.
 
 ![Renders beside the reference photos](model/renders/contact-sheet.jpg)
 
@@ -9,9 +9,35 @@ A silver seal ring (khatm) modelled in Blender for casting. The round face carri
 | Path | Contents |
 |---|---|
 | `reference/` | Photos of the original ring |
-| `extracted/` | Ring cut out of each photo, the rectified face, and the redrawn inscription |
-| `scripts/` | Extraction, inscription and Blender build scripts |
+| `reference/seal/` | Public-domain renderings of the seal the letters are traced from, with `SOURCES.md` |
+| `design/inscription-layout.json` | Hand-tuned position, turn and scale of each letter piece |
+| `extracted/` | Ring cut out of each photo, and the laid-out inscription |
+| `scripts/` | Extraction, inscription and Blender scripts |
 | `model/` | Blender file, STL, GLB and renders |
+
+## Inscription
+
+The letters are traced from a seal rendering in `reference/seal/`, not redrawn, so they keep their thick and thin strokes and tapered ends. `inscription.py` emboldens them to the weight of the original ring and rounds off any tip too fine to cast.
+
+Each connected letter group is a piece: `allah_1`, `allah_2`, `rasul_1` to `rasul_3` and `muhammad_1`, numbered right to left within each line. See `extracted/inscription-labelled.png`.
+
+To rebalance the pieces, either:
+
+- edit `design/inscription-layout.json` (`dx` and `dy` in mm, `rotate` in degrees, `scale`), or
+- drag them in Blender. Send `exec(open(r"scripts/live_letters.py").read()); show()` to lay the pieces over the face, move them in top view, then send `read_back()`.
+
+Then run `uv run scripts/inscription.py` and rebuild. It warns when two pieces come within 0.35 mm of each other or of the rim.
+
+Three source renderings are wired in: `canonical`, `impression` (default, the most hand-cut) and `asymmetric`. `uv run scripts/inscription.py asymmetric` switches; `extracted/inscription-variants.jpg` compares them with the original ring.
+
+## Form
+
+`scripts/ring_sdf.py` models the whole ring as one signed distance field and meshes it once with marching cubes. Parts are joined with smooth unions, so every join is a fillet by construction:
+
+- **Head.** One curve runs from the crown round down into the foot. The head sits on a saddle cut to the band's curve, and its back is open, with a rolled lip and a domed ceiling.
+- **Band.** It flares to 8.5 mm wide and 1.3 mm thick under the head, along one eased curve for width and thickness. It then thins to rounded tips 0.9 mm thick, which you bend to size. A faint width wave keeps it from looking machined.
+- **Joins.** The shoulders blend into the head with a 1.5 mm fillet (`K_SHOULDER`). The fillet fades to nothing before the overlap, so the two ends never fuse.
+- **Face.** The rim's outer edge is a true circle. Its inner edge follows the hand-cut border of the seal reference, and a 45° bevel leads down into the oxidised field.
 
 ## Weight
 
@@ -23,39 +49,23 @@ The model is sized to **5.80 g in sterling silver**, under the Maliki limit for 
 | Limit, 2 dirhams | 5.95 g | |
 | Target, `TARGET_G` | 5.80 g | margin for the dirham dispute and for density |
 | Sterling 925 density, `DENSITY_G_MM3` | 10.36 g/cm³ | fine silver is about 10.49 |
-| Metal volume | 559.8 mm³ | measured on the finished mesh |
 
-`build_to_weight()` in `scripts/build_ring.py` builds the ring, then rescales the band width so the volume hits the target. Everything else stays fixed. Check the weight on the real casting: sprue position, porosity and polishing all move it.
+`ring_sdf.py --solve` adjusts only the band's end width until the volume meets the target, so the shoulder flare is kept. It counts metal on a 0.1 mm grid in seconds, then meshes at 0.05 mm. Weigh the real casting: sprue position, porosity and polishing all move it.
 
 ## Casting
 
-- **One section thickness.** Face plate, bezel wall and band are all close to 0.9 to 1.25 mm, and the back of the face is pocketed under each letter so the plate stays 0.9 mm everywhere.
-- **No sharp edges.** Letters, rim, bezel foot and band edges are rounded. The arms are filleted into the bezel.
-- **Stays adjustable.** The two band ends overlap with a 0.35 mm gap (`OVERLAP_GAP`), so they do not fuse in the mould.
-- **Castable detail.** Letter strokes are 1.22 mm wide, letter holes 0.95 mm, and no pocket is narrower than 0.5 mm.
-- **Watertight.** The exported mesh is a single closed shell with no non-manifold edges.
-
-## Assumed dimensions
-
-The photos have no scale reference. Measure the ring and change the constants at the top of `scripts/build_ring.py`.
-
-| Constant | Value |
-|---|---|
-| `FACE_D` | 17 mm |
-| `INNER_D` | 19 mm |
-| `BAND_T` | 1.25 mm |
-| `BEZEL_H` | 2.7 mm |
-| `RELIEF` | 0.6 mm letter height |
-
-Changing `FACE_D` means rerunning `scripts/inscription.py`, which records the face size it was drawn for.
+- Sections stay between about 0.6 mm (centre of the face plate) and 1.3 mm.
+- Letter features are at least 0.4 mm wide, counters at least 0.6 mm.
+- Every outside edge is rounded; the arms are blended into the head.
+- The band ends overlap with a 0.35 mm gap (`OVERLAP_GAP`), so they do not fuse in the mould.
+- The exported mesh is one closed shell with no non-manifold edges.
 
 ## Rebuild
 
 1. `uv run scripts/extract.py` cuts the ring out of each photo.
-2. `uv run scripts/rectify_face.py` warps the tilted face back to a circle.
-3. `uv run scripts/inscription.py` draws the inscription as even-width strokes. It writes the letter and back-pocket outlines, and an overlay on the photo for checking.
-4. Build the model, either way:
+2. `uv run scripts/inscription.py [variant]` traces and lays out the inscription.
+3. Build the model, either way. Both run `ring_sdf.py --solve` through uv, import the mesh, then add materials and export.
    - Headless: `blender -b --factory-startup -P scripts/build_ring.py -- --render`
-   - Live, in an open Blender with the [BlenderMCP](https://github.com/ahujasid/blender-mcp) add-on running: `python scripts/blender_live.py scripts/live_build.py`. The ring rebuilds in the open window. `blender_live.py -c "<python>"` runs any snippet the same way.
+   - Live, in an open Blender with the [BlenderMCP](https://github.com/ahujasid/blender-mcp) add-on running (start Blender with `--addons addon`): `python scripts/blender_live.py scripts/live_build.py`. The ring rebuilds in the open window.
 
-Tested with Blender 4.5 LTS.
+Tested with Blender 4.5 LTS. Sizes are estimates from the photos; the constants at the top of `scripts/ring_sdf.py` are the knobs.
