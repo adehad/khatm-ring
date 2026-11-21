@@ -2,6 +2,8 @@
 
 A sterling silver seal ring (khatm), modelled for casting. The round face carries the prophetic seal inscription, top to bottom, الله / رسول / محمد. The band is open. Its ends overlap under the finger, and you size the ring by bending them.
 
+**[Turn it around in 3D](https://adehad.github.io/khatm-ring/)**
+
 ![Renders beside photos of the original ring](model/renders/contact-sheet.webp)
 
 | Face | Three-quarter | Underside |
@@ -16,7 +18,7 @@ A sterling silver seal ring (khatm), modelled for casting. The round face carrie
 |---|---|
 | `model/khatm-ring.stl.xz` | The ring for casting, as one closed binary STL in millimetres, xz-compressed |
 | `model/renders/` | Cycles renders and the contact sheet above |
-| `site/` | The 3D viewer |
+| `site/` | The 3D viewer, published to GitHub Pages |
 
 Unpack the STL with `xz -dk model/khatm-ring.stl.xz` or 7-Zip, or use the STL button in the viewer.
 
@@ -49,14 +51,14 @@ The weight comes from the model's volume, not from a casting. Sprue position, po
 
 `site/` is a TypeScript three.js page built with bun. The ring floats 10 mm above rippled sand, lit by six warm softboxes and two more above and below it. The page unpacks the STL in the browser. It darkens every upward facet at the `field_z` height in the STL's header, which is the recessed field, and links the build commit under the title.
 
-Bun names the JS and CSS after a hash of their content, and `build.ts` does the same for the model (`khatm-ring.<hash>.stl.xz`). Only `index.html` keeps its name, so browsers keep the rest cached until it changes.
+GitHub Pages serves every file with a 10-minute cache. Bun names the JS and CSS after a hash of their content, and `build.ts` does the same for the model (`khatm-ring.<hash>.stl.xz`). Only `index.html` keeps its name, so a deploy reaches visitors within 10 minutes, and a model that didn't change stays cached.
 
 ```sh
 cd site
 bun install
 bun run dev     # serves the page and ../model/khatm-ring.stl.xz
 bun run check   # tsc, oxlint (type-aware), oxfmt
-bun run build   # writes dist/
+bun run build   # writes dist/, which .github/workflows/pages.yml publishes
 ```
 
 Hooks in `.pre-commit-config.yaml` run the same checks before each commit: `uvx prek install` (or `pre-commit install`).
