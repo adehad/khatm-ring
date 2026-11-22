@@ -122,12 +122,14 @@ canvas.addEventListener("pointerdown", () => {
 });
 
 const flight = new CameraFlight(camera, controls);
+const views = byId("views", HTMLDivElement);
 for (const button of document.querySelectorAll<HTMLButtonElement>("[data-view]")) {
   const view = button.dataset["view"];
   if (!isViewName(view)) throw new Error(`unknown view ${view ?? "(none)"}`);
   button.addEventListener("click", () => {
     setSpin(false);
     flight.to(view);
+    views.hidePopover();
   });
 }
 
@@ -175,7 +177,9 @@ try {
     details,
     build,
     download,
-    size: byId("size", HTMLSelectElement),
+    sizeButton: byId("size-button", HTMLButtonElement),
+    sizeLabel: byId("size-label", HTMLSpanElement),
+    sizes: byId("sizes", HTMLDivElement),
     show: showRing,
     status: (text) => {
       status.textContent = text;

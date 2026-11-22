@@ -26,29 +26,39 @@
     ></canvas>
 
     <header>
-      <h1>Khatm ring</h1>
-      <p>Sterling silver seal ring</p>
-      <p id="details"></p>
-      <p id="build"></p>
+      <div class="title">
+        <h1>Khatm ring</h1>
+        <button
+          type="button"
+          class="icon"
+          popovertarget="info"
+          data-icon="info"
+          aria-label="About this ring"
+        ></button>
+        <div id="info" popover class="flyout">
+          <p>Sterling silver seal ring</p>
+          <p id="details"></p>
+          <p id="build"></p>
+        </div>
+      </div>
+      <button type="button" id="size-button" class="size" popovertarget="sizes" data-icon="ruler" disabled>
+        <span id="size-label">Size</span>
+      </button>
+      <div id="sizes" popover class="flyout list" role="group" aria-label="Ring sizes"></div>
     </header>
 
     <p id="status" role="status">Loading model…</p>
 
     <nav aria-label="Viewer controls">
-      <div class="group" role="group" aria-label="Views">
-        <button type="button" data-view="three-quarter">Three-quarter</button>
-        <button type="button" data-view="face">Face</button>
-        <button type="button" data-view="front">Front</button>
-        <button type="button" data-view="side">Side</button>
-        <button type="button" data-view="underside">Underside</button>
-      </div>
-      <label class="group size" data-icon="ruler">
-        <span class="visually-hidden">Ring size</span>
-        <select id="size" disabled>
-          <option>Size</option>
-        </select>
-      </label>
       <div class="group">
+        <button type="button" popovertarget="views" data-icon="views">Views</button>
+        <div id="views" popover class="flyout list" role="group" aria-label="Views">
+          <button type="button" data-view="three-quarter">Three-quarter</button>
+          <button type="button" data-view="face">Face</button>
+          <button type="button" data-view="front">Front</button>
+          <button type="button" data-view="side">Side</button>
+          <button type="button" data-view="underside">Underside</button>
+        </div>
         <button type="button" id="spin" data-icon="spin" aria-pressed="true">Spin</button>
         <button type="button" id="theme">
           <span class="to-dark" data-icon="moon">Dark</span>

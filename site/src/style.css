@@ -85,14 +85,99 @@ h1 {
   letter-spacing: 0.01em;
 }
 
-header p {
-  margin: 2px 0 0;
-  color: var(--muted);
-  font-size: 0.85rem;
+.title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
-#details {
+
+header > .size {
+  margin-top: 6px;
+  padding: 0 10px 0 8px;
+  min-height: 32px;
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+
+button.icon {
+  padding: 0;
+  min-width: 36px;
+  justify-content: center;
+  color: var(--muted);
+}
+
+/* Flyouts open from the button that names them (popovertarget). */
+.flyout {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--edge);
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  color: var(--ink);
+  font-size: 0.85rem;
+}
+#info {
+  width: max-content;
+  max-width: calc(100vw - 32px);
+}
+.flyout p {
+  margin: 2px 0;
+  color: var(--muted);
+}
+.flyout.list {
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  max-height: min(60vh, 26rem);
+  overflow-y: auto;
+}
+.flyout.list:popover-open {
+  display: flex;
+}
+.flyout.list button {
+  justify-content: flex-start;
+}
+.flyout.list button[aria-pressed="true"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+@supports (position-area: block-end) {
+  .flyout {
+    inset: auto;
+    margin: 6px 0;
+    position-area: block-end span-inline-end;
+    position-try-fallbacks:
+      flip-block,
+      flip-inline,
+      flip-block flip-inline;
+  }
+  #views {
+    position-area: block-start span-inline-end;
+  }
+  /* Below the whole header card, not over the size button. */
+  header {
+    anchor-name: --header;
+  }
+  #info {
+    position-anchor: --header;
+  }
+}
+/* Without anchor positioning, park the header's flyouts under the header and
+   the views above the controls. */
+@supports not (position-area: block-end) {
+  .flyout {
+    position: fixed;
+    inset: 120px auto auto 16px;
+  }
+  #views {
+    inset: auto auto 72px 50%;
+    translate: -50% 0;
+  }
+}
+
 #build a {
   color: inherit;
   font-family: ui-monospace, monospace;
@@ -172,48 +257,6 @@ button:focus-visible {
 button[aria-pressed="true"] {
   color: var(--accent);
   font-weight: 600;
-}
-
-.size {
-  align-items: center;
-  gap: 4px;
-  padding-left: 12px;
-  color: var(--ink);
-}
-.size select {
-  min-height: 36px;
-  max-width: 17rem;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-.size select:hover:not(:disabled) {
-  background: var(--edge);
-}
-.size select:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.size select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-.size option {
-  background: var(--sky);
-  color: var(--ink);
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
 }
 
 /* The theme button names the scheme it switches to. */

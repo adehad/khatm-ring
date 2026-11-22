@@ -1,12 +1,14 @@
-import { createElement, Download, Moon, RotateCw, Ruler, Sun, type IconNode } from "lucide";
+import { createElement, Download, Info, Moon, Rotate3d, RotateCw, Ruler, Sun, type IconNode } from "lucide";
 
 // Controls name their icon with data-icon; the icon goes before the label.
 const ICONS: Readonly<Record<string, IconNode>> = {
   download: Download,
+  info: Info,
   moon: Moon,
   ruler: Ruler,
   spin: RotateCw,
   sun: Sun,
+  views: Rotate3d,
 };
 
 export function placeIcons(root: ParentNode = document): void {
