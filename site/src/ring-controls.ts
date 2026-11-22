@@ -12,6 +12,9 @@ const REPO_URL = "https://github.com/adehad/khatm-ring";
 const PUBLISHED = "published";
 const US_SIZES = { first: 4, last: 13, step: 0.5 } as const;
 const NO_WEBGPU = "Changing the size needs a browser with WebGPU.";
+// The page's query parameter for a rebuilt ring's US size, so a reload or a
+// shared link opens the same size.
+const SIZE_PARAM = "us";
 
 const STAGE_TEXT: Readonly<Record<Stage, string>> = {
   solving: "sizing the band",
@@ -68,6 +71,7 @@ function sizeRow(spec: RingSpec, value: string, diameter: number, published: boo
   button.type = "button";
   button.value = value;
   button.setAttribute("aria-pressed", String(published));
+  if (!published) button.dataset["us"] = names.us;
   button.setAttribute("aria-label", `US ${names.us}, UK ${uk}, ${mm} mm${published ? ", as published" : ""}`);
   const tag = cell(published ? "published" : "");
   tag.className = "tag";
@@ -127,7 +131,19 @@ function presenter(controls: RingControls): Present {
   };
 }
 
-function listenForSizes(spec: RingSpec, controls: RingControls, present: Present): void {
+function rememberSize(us: string | undefined): void {
+  const url = new URL(location.href);
+  if (us === undefined) url.searchParams.delete(SIZE_PARAM);
+  else url.searchParams.set(SIZE_PARAM, us);
+  history.replaceState(history.state, "", url);
+}
+
+/** Wires up the size table, and returns how to choose one of its rows. */
+function listenForSizes(
+  spec: RingSpec,
+  controls: RingControls,
+  present: Present,
+): (chosen: HTMLButtonElement) => void {
   const { published, sizes, status } = controls;
   let gpu: Promise<RingGpu> | undefined;
   const rebuild = async (insideD: number): Promise<void> => {
@@ -145,13 +161,11 @@ function listenForSizes(spec: RingSpec, controls: RingControls, present: Present
     present(ringFromStl(built.stl), built);
   };
 
-  sizes.addEventListener("click", (event) => {
-    const chosen = event.target instanceof Element ? event.target.closest("button") : null;
-    if (chosen === null) return;
-    sizes.hidePopover();
+  const choose = (chosen: HTMLButtonElement): void => {
     for (const button of sizes.querySelectorAll("button")) {
       button.setAttribute("aria-pressed", String(button === chosen));
     }
+    rememberSize(chosen.dataset["us"]);
     if (chosen.value === PUBLISHED) {
       present(published);
       return;
@@ -165,7 +179,14 @@ function listenForSizes(spec: RingSpec, controls: RingControls, present: Present
       .finally(() => {
         controls.sizeButton.disabled = false;
       });
+  };
+  sizes.addEventListener("click", (event) => {
+    const chosen = event.target instanceof Element ? event.target.closest("button") : null;
+    if (chosen === null) return;
+    sizes.hidePopover();
+    choose(chosen);
   });
+  return choose;
 }
 
 export async function initRingControls(controls: RingControls): Promise<void> {
@@ -179,5 +200,8 @@ export async function initRingControls(controls: RingControls): Promise<void> {
   controls.sizes.replaceChildren(...sizeTable(spec, controls.published.info));
   centreChosen(controls.sizes);
   controls.sizeButton.disabled = false;
-  listenForSizes(spec, controls, present);
+  const choose = listenForSizes(spec, controls, present);
+  const asked = new URL(location.href).searchParams.get(SIZE_PARAM);
+  const row = [...controls.sizes.querySelectorAll("button")].find((button) => button.dataset["us"] === asked);
+  if (row !== undefined) choose(row);
 }
