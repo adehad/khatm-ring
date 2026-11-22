@@ -15,6 +15,7 @@ const SECANT_ROUNDS = 6;
 const SECANT_TOLERANCE_MM3 = 1;
 const WIDTH_STEP_MM = 0.5;
 const THICKNESS_STEP_MM = 0.1;
+const PLATE_STEP_MM = 0.1;
 // meshoptimizer stops collapsing edges before the surface moves further.
 const SIMPLIFY_ERROR_MM = 0.005;
 const WEIGHT_TOLERANCE_G = 0.05;
@@ -53,7 +54,10 @@ async function secant(
   return b;
 }
 
-/** ring_sdf.solve_band: the end width first, then the end thickness. */
+/**
+ * ring_sdf.solve_band: the end width first; then, at its widest, the plate's
+ * extra thickness, or at its narrowest, the end thickness.
+ */
 export async function solveBand(
   gpu: RingGpu,
   spec: RingSpec,
@@ -62,23 +66,38 @@ export async function solveBand(
 ): Promise<RingShape> {
   const target = targetG / sdfNumber(spec, "DENSITY_G_MM3");
   const tEnd = sdfNumber(spec, "BAND_T_END");
-  const widths = sdfRange(spec, "BAND_W_END_RANGE");
+  const plateExtra = sdfNumber(spec, "PLATE_EXTRA");
+  const [narrowest, widest] = sdfRange(spec, "BAND_W_END_RANGE");
   const [wEnd, v] = await secant(
-    (w) => gpu.volume({ insideD, wEnd: w, tEnd }, SOLVE_VOXEL_MM),
+    (w) => gpu.volume({ insideD, wEnd: w, tEnd, plateExtra }, SOLVE_VOXEL_MM),
     sdfNumber(spec, "BAND_W_END"),
     WIDTH_STEP_MM,
-    widths,
+    [narrowest, widest],
     target,
   );
-  if (Math.abs(v - target) <= SECANT_TOLERANCE_MM3 || !widths.includes(wEnd)) return { insideD, wEnd, tEnd };
-  const [t] = await secant(
-    (thickness) => gpu.volume({ insideD, wEnd, tEnd: thickness }, SOLVE_VOXEL_MM),
-    tEnd,
-    THICKNESS_STEP_MM,
-    sdfRange(spec, "BAND_T_END_RANGE"),
-    target,
-  );
-  return { insideD, wEnd, tEnd: t };
+  const shape = { insideD, wEnd, tEnd, plateExtra };
+  if (Math.abs(v - target) <= SECANT_TOLERANCE_MM3) return shape;
+  if (wEnd === widest) {
+    const [plate] = await secant(
+      (extra) => gpu.volume({ ...shape, plateExtra: extra }, SOLVE_VOXEL_MM),
+      plateExtra,
+      PLATE_STEP_MM,
+      sdfRange(spec, "PLATE_EXTRA_RANGE"),
+      target,
+    );
+    return { ...shape, plateExtra: plate };
+  }
+  if (wEnd === narrowest) {
+    const [t] = await secant(
+      (thickness) => gpu.volume({ ...shape, tEnd: thickness }, SOLVE_VOXEL_MM),
+      tEnd,
+      THICKNESS_STEP_MM,
+      sdfRange(spec, "BAND_T_END_RANGE"),
+      target,
+    );
+    return { ...shape, tEnd: t };
+  }
+  return shape;
 }
 
 /** Merges the soup's shared corners and drops triangles that collapse to a line. */

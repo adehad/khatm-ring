@@ -3,11 +3,13 @@ import { sdfNumber, type RingSpec } from "../ring-spec.ts";
 // The sizes and grid ring_sdf.py derives from the finger, and the WGSL for
 // its named constants.
 
-/** What sets one ring apart from another: the finger, and the band's ends. */
+/** What sets one ring apart from another: the finger, the band's ends, and
+ * the plate's extra thickness (ring_sdf.PLATE_EXTRA). */
 export interface RingShape {
   readonly insideD: number;
   readonly wEnd: number;
   readonly tEnd: number;
+  readonly plateExtra: number;
 }
 
 export interface Grid {

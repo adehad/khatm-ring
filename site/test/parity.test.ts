@@ -30,12 +30,14 @@ interface Shape {
   readonly insideD: number;
   readonly wEnd: number;
   readonly tEnd: number;
+  readonly plateExtra: number;
 }
 
 interface Stats {
   readonly volume_mm3: number;
   readonly band_end_width_mm: number;
   readonly band_end_thickness_mm: number;
+  readonly plate_extra_mm: number;
 }
 
 interface Api {
@@ -107,6 +109,8 @@ function shapeArgs(shape: Shape): string[] {
     String(shape.wEnd),
     "--t-end",
     String(shape.tEnd),
+    "--plate-extra",
+    String(shape.plateExtra),
   ];
 }
 
@@ -126,6 +130,7 @@ async function meshStats(args: readonly string[]): Promise<Stats> {
     volume_mm3: numberAt(stats, ["volume_mm3"]),
     band_end_width_mm: numberAt(stats, ["band_end_width_mm"]),
     band_end_thickness_mm: numberAt(stats, ["band_end_thickness_mm"]),
+    plate_extra_mm: numberAt(stats, ["plate_extra_mm"]),
   };
 }
 
@@ -166,7 +171,12 @@ async function closePage(): Promise<void> {
 }
 
 async function checkField(insideD: number): Promise<void> {
-  const shape = { insideD, wEnd: 2.6 + Math.random() * 2.4, tEnd: 0.8 + Math.random() * 0.5 };
+  const shape = {
+    insideD,
+    wEnd: 2.6 + Math.random() * 2.4,
+    tEnd: 0.8 + Math.random() * 0.5,
+    plateExtra: Math.random() * 0.5,
+  };
   points = randomPoints(insideD);
   const [expected, actual] = await Promise.all([
     reference(shape),
@@ -191,8 +201,14 @@ async function checkSolve(insideD: number): Promise<void> {
   const gpu = await tab.evaluate(([d, g]) => khatm.solve(d, g), [insideD, TARGET_G] as const);
   expect(Math.abs(gpu.wEnd - solved.band_end_width_mm)).toBeLessThan(SOLVE_TOLERANCE_MM);
   expect(Math.abs(gpu.tEnd - solved.band_end_thickness_mm)).toBeLessThan(SOLVE_TOLERANCE_MM);
+  expect(Math.abs(gpu.plateExtra - solved.plate_extra_mm)).toBeLessThan(SOLVE_TOLERANCE_MM);
 
-  const shape = { insideD, wEnd: solved.band_end_width_mm, tEnd: solved.band_end_thickness_mm };
+  const shape = {
+    insideD,
+    wEnd: solved.band_end_width_mm,
+    tEnd: solved.band_end_thickness_mm,
+    plateExtra: solved.plate_extra_mm,
+  };
   const [expected, volume] = await Promise.all([
     meshStats(shapeArgs(shape)),
     tab.evaluate((s) => khatm.volume(s, 0.1), shape),

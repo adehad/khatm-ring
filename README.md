@@ -67,7 +67,7 @@ Hooks in `.pre-commit-config.yaml` run the same checks before each commit: `uvx 
 The size picker rebuilds the ring in the browser, on the GPU, in a few seconds. It needs WebGPU. Without it the page shows the published size only.
 
 1. `src/gpu/ring.wgsl` is a port of the build branch's `ring_sdf.py`. Its constants come from `model/ring-sdf.json` and its face rasters from `model/face-fields.f16.xz`, so only the code is copied.
-2. The band's end width, then its thickness, is solved for the target weight, as the build does.
+2. The band's end width is solved for the target weight, as the build does. A small ring that is still light at the widest band gets a thicker plate under the face; a large one still heavy at the narrowest gets thinner band ends.
 3. Marching cubes runs on the GPU at 0.05 mm, a slab at a time.
 4. meshoptimizer cuts the mesh to about the published STL's facet count.
 

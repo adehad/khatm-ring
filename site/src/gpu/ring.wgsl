@@ -61,23 +61,51 @@ fn head_radius(z: f32) -> vec2f {
   return vec2f(FACE_D / 2.0 + HEAD_FLARE * u * u, 2.0 * HEAD_FLARE * u / HEAD_DROP);
 }
 
-// Where the head's wall, at its widest, meets the band's outside: (x, z).
-fn head_join() -> vec2f {
-  let r_wall = FACE_D / 2.0 + HEAD_FLARE;
-  let r_out = P.r_finger + BAND_T_ROOT;
-  return vec2f(r_wall, sqrt(max(r_out * r_out - r_wall * r_wall, 0.0)));
+// A wall at x_from curving in over span to meet a circle round the finger at
+// (x_meet, z_meet) along its tangent: the change in radius and in slope.
+fn tuck(z: f32, x_from: f32, x_meet: f32, z_meet: f32, span: f32) -> vec2f {
+  let shift = x_meet - x_from;
+  let bend = span * z_meet / x_meet;
+  let u = clamp((z_meet + span - z) / span, 0.0, 1.0);
+  let dr = shift * u * u * (3.0 - 2.0 * u) + bend * u * u * (u - 1.0);
+  return vec2f(dr, abs(shift * 6.0 * u * (1.0 - u) + bend * u * (3.0 * u - 2.0)) / span);
 }
 
-// The band's width at theta degrees, before its tip and wave, and how far
-// through its flare it is.
-fn band_width(theta: f32) -> vec2f {
+// How far the band is through its flare at theta degrees, 0 to 1.
+fn band_flare(theta: f32) -> f32 {
   let u = (clamp(theta, ARM_START_DEG, ARM_END_DEG) - ARM_START_DEG) / (ARM_END_DEG - ARM_START_DEG);
-  let s = smoother_step(u / FLARE_SPAN);
-  return vec2f(BAND_W_ROOT + (P.w_end - BAND_W_ROOT) * s, s);
+  return smoother_step(u / FLARE_SPAN);
+}
+
+fn band_thickness(theta: f32) -> f32 {
+  return BAND_T_ROOT + (P.t_end - BAND_T_ROOT) * band_flare(theta);
+}
+
+// Where the head's wall meets the band's outside: (x, z), tucked in to
+// HEAD_TUCK_Z on a small finger.
+fn head_join() -> vec2f {
+  let r_wall = FACE_D / 2.0 + HEAD_FLARE;
+  var r_out = P.r_finger + BAND_T_ROOT;
+  let z_join = sqrt(max(r_out * r_out - r_wall * r_wall, 0.0));
+  if z_join >= HEAD_TUCK_Z {
+    return vec2f(r_wall, z_join);
+  }
+  var x = sqrt(r_out * r_out - HEAD_TUCK_Z * HEAD_TUCK_Z);
+  for (var i = 0; i < 4; i++) {
+    r_out = P.r_finger + band_thickness(degrees(atan2(x, HEAD_TUCK_Z)));
+    x = sqrt(r_out * r_out - HEAD_TUCK_Z * HEAD_TUCK_Z);
+  }
+  return vec2f(x, HEAD_TUCK_Z);
 }
 
 fn head(x: f32, y: f32, rho: f32, z: f32, rf: f32) -> f32 {
-  let wall = head_radius(z);
+  var wall = head_radius(z);
+  let join = head_join();
+  let r_wall = FACE_D / 2.0 + HEAD_FLARE;
+  let tucked = join.x < r_wall;
+  if tucked {
+    wall = wall + tuck(z, r_wall, join.x, join.y, HEAD_TUCK);
+  }
   let qx = (rho - wall.x) / sqrt(1.0 + wall.y * wall.y) + CROWN_R;
   let qz = z - P.z_top + CROWN_R;
   var d = min(max(qx, qz), 0.0) + length(max(vec2f(qx, qz), vec2f(0.0))) - CROWN_R;
@@ -89,11 +117,17 @@ fn head(x: f32, y: f32, rho: f32, z: f32, rf: f32) -> f32 {
   d = smax(d, floor_z - rf, select(K_SEAT, K_BOAT, u > 0.0));
   let theta = degrees(atan2(abs(x), z));
   let off = 1.0 - smooth_step((theta - HEAD_SIDE_START_DEG) / (HEAD_SIDE_END_DEG - HEAD_SIDE_START_DEG));
-  let reach = band_width(theta).x / 2.0 - HEAD_SIDE_INSET
+  let width = BAND_W_ROOT + (P.w_end - BAND_W_ROOT) * band_flare(theta);
+  let reach = width / 2.0 - HEAD_SIDE_INSET
     + HEAD_SIDE_FLARE * max(rf - P.r_finger - BAND_T_ROOT, 0.0) + off * FACE_D;
   d = smax(d, abs(y) - reach, K_HEAD_SIDE);
-  let z_join = head_join().y;
-  return max(d, z_join - 1.0 - z);
+  if !tucked {
+    return max(d, join.y - 1.0 - z);
+  }
+  let join_deg = degrees(atan2(join.x, join.y));
+  d = max(d, radians(theta - join_deg - SHOULDER_FADE_DEG) * rf);
+  let sink = HEAD_BURY * smooth_step((theta - join_deg) / HEAD_BURY_DEG);
+  return max(d, select(-FACE_D, rf - (P.r_finger + band_thickness(theta) - sink), theta > join_deg));
 }
 
 fn cavity(rho: f32, z: f32) -> f32 {
@@ -110,18 +144,15 @@ fn cavity(rho: f32, z: f32) -> f32 {
     slope = slope + 2.0 * CAVITY_LEAN * u / span;
   } else {
     z_meet = CAVITY_TUCK_Z;
-    let x_hole = sqrt(P.r_finger * P.r_finger - z_meet * z_meet);
-    let shift = x_hole - x_wall;
-    let bend = CAVITY_TUCK * z_meet / x_hole;
-    let u = clamp((z_meet + CAVITY_TUCK - z) / CAVITY_TUCK, 0.0, 1.0);
-    r = r + shift * u * u * (3.0 - 2.0 * u) + bend * u * u * (u - 1.0);
-    slope = slope + abs(shift * 6.0 * u * (1.0 - u) + bend * u * (3.0 * u - 2.0)) / CAVITY_TUCK;
+    let change = tuck(z, x_wall, sqrt(P.r_finger * P.r_finger - z_meet * z_meet), z_meet, CAVITY_TUCK);
+    r = r + change.x;
+    slope = slope + change.y;
   }
   var walls = (rho - (r - WALL_T)) / sqrt(1.0 + slope * slope);
   walls = max(walls, z_meet - 0.5 - z);
   let r_c = FACE_D / 2.0 - WALL_T;
   let dome = (PLATE_RIM - PLATE_CENTRE) / (r_c * r_c);
-  let ceiling = P.z_field - PLATE_CENTRE - dome * rho * rho;
+  let ceiling = P.z_field - PLATE_CENTRE - P.plate_extra - dome * rho * rho;
   let under = (z - ceiling) / sqrt(1.0 + (2.0 * dome * rho) * (2.0 * dome * rho));
   return smax(walls, under, K_CAVITY_CORNER);
 }
@@ -132,9 +163,8 @@ fn arm(x: f32, y: f32, z: f32, side: f32, rides_over: bool, phase: f32) -> vec2f
   let raw = degrees(atan2(side * x, z));
   let theta = raw - 360.0 * floor(raw / 360.0);
   let th = clamp(theta, ARM_START_DEG, ARM_END_DEG);
-  let band = band_width(theta);
-  let s = band.y;
-  var w = band.x;
+  let s = band_flare(theta);
+  var w = BAND_W_ROOT + (P.w_end - BAND_W_ROOT) * s;
   var t = BAND_T_ROOT + (P.t_end - BAND_T_ROOT) * s;
   let tip = smooth_step((th - (ARM_END_DEG - TIP_TAPER_DEG)) / TIP_TAPER_DEG);
   w = w + (TIP_W - w) * tip;
@@ -171,7 +201,7 @@ fn ring(p: vec3f) -> f32 {
   for (var i = 0; i < 2; i++) {
     let first = i == 0;
     let a = arm(p.x, p.y, p.z, select(-1.0, 1.0, first), !first, select(1.9, 0.0, first));
-    var k = K_SHOULDER * (1.0 - smooth_step((a.y - fade_deg) / 35.0)) * smooth_step((rf - P.r_finger) / BAND_T_ROOT);
+    var k = K_SHOULDER * (1.0 - smooth_step((a.y - fade_deg) / SHOULDER_FADE_DEG)) * smooth_step((rf - P.r_finger) / BAND_T_ROOT);
     k = select(k, 0.0, a.y > 300.0);
     body = smin(body, a.x, k);
   }

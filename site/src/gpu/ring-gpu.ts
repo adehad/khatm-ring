@@ -5,7 +5,8 @@ import marchingWgsl from "./marching.wgsl" with { type: "text" };
 import paramsWgsl from "./params.wgsl" with { type: "text" };
 import ringWgsl from "./ring.wgsl" with { type: "text" };
 
-const PARAMS_BYTES = 64;
+// params.wgsl's Params, rounded up to a multiple of 16 bytes.
+const PARAMS_BYTES = 80;
 const FLOATS_PER_TRIANGLE = 9;
 const BYTES_PER_TRIANGLE = FLOATS_PER_TRIANGLE * 4;
 const SAMPLE_GROUP = 64;
@@ -130,6 +131,7 @@ export class RingGpu {
     f.set([size.rFinger, size.rSaddle, size.zTop, size.zField, shape.wEnd, shape.tEnd], 8);
     u[14] = extra.capacity ?? 0;
     u[15] = extra.points ?? 0;
+    f[16] = shape.plateExtra;
     this.device.queue.writeBuffer(this.params, 0, data);
   }
 
