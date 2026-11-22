@@ -46,7 +46,7 @@ jobs:
           fetch-depth: 0
           path: build-branch
       - run: git -C build-branch checkout --detach ${{ steps.model.outputs.commit }}
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0
       - uses: oven-sh/setup-bun@v2
       - working-directory: site
         run: |
