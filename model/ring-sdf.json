@@ -12,6 +12,10 @@
     "CAVITY_LEAN": 0.6,
     "CAVITY_TUCK": 3.0,
     "CAVITY_TUCK_Z": 2.5,
+    "HEAD_SIDE_INSET": 0.3,
+    "HEAD_SIDE_FLARE": 0.5,
+    "HEAD_SIDE_START_DEG": 50.0,
+    "HEAD_SIDE_END_DEG": 70.0,
     "PLATE_RIM": 0.8,
     "PLATE_CENTRE": 0.6,
     "LETTER_ROUND": 0.18,
@@ -43,6 +47,7 @@
     "K_BOAT": 1.2,
     "K_LIP": 0.35,
     "K_CAVITY_CORNER": 0.35,
+    "K_HEAD_SIDE": 1.0,
     "K_RECESS": 0.08,
     "K_LETTER": 0.1,
     "RASTER": 0.01

@@ -68,7 +68,15 @@ fn head_join() -> vec2f {
   return vec2f(r_wall, sqrt(max(r_out * r_out - r_wall * r_wall, 0.0)));
 }
 
-fn head(y: f32, rho: f32, z: f32, rf: f32) -> f32 {
+// The band's width at theta degrees, before its tip and wave, and how far
+// through its flare it is.
+fn band_width(theta: f32) -> vec2f {
+  let u = (clamp(theta, ARM_START_DEG, ARM_END_DEG) - ARM_START_DEG) / (ARM_END_DEG - ARM_START_DEG);
+  let s = smoother_step(u / FLARE_SPAN);
+  return vec2f(BAND_W_ROOT + (P.w_end - BAND_W_ROOT) * s, s);
+}
+
+fn head(x: f32, y: f32, rho: f32, z: f32, rf: f32) -> f32 {
   let wall = head_radius(z);
   let qx = (rho - wall.x) / sqrt(1.0 + wall.y * wall.y) + CROWN_R;
   let qz = z - P.z_top + CROWN_R;
@@ -79,6 +87,11 @@ fn head(y: f32, rho: f32, z: f32, rf: f32) -> f32 {
   let rise = select(0.0, pow(u, BOAT_POWER), u > 0.0);
   let floor_z = P.r_saddle + (P.z_top - BOAT_EDGE - P.r_saddle) * rise;
   d = smax(d, floor_z - rf, select(K_SEAT, K_BOAT, u > 0.0));
+  let theta = degrees(atan2(abs(x), z));
+  let off = 1.0 - smooth_step((theta - HEAD_SIDE_START_DEG) / (HEAD_SIDE_END_DEG - HEAD_SIDE_START_DEG));
+  let reach = band_width(theta).x / 2.0 - HEAD_SIDE_INSET
+    + HEAD_SIDE_FLARE * max(rf - P.r_finger - BAND_T_ROOT, 0.0) + off * FACE_D;
+  d = smax(d, abs(y) - reach, K_HEAD_SIDE);
   let z_join = head_join().y;
   return max(d, z_join - 1.0 - z);
 }
@@ -118,11 +131,10 @@ fn arm(x: f32, y: f32, z: f32, side: f32, rides_over: bool, phase: f32) -> vec2f
   let rf = length(vec2f(x, z));
   let raw = degrees(atan2(side * x, z));
   let theta = raw - 360.0 * floor(raw / 360.0);
-  let span = ARM_END_DEG - ARM_START_DEG;
   let th = clamp(theta, ARM_START_DEG, ARM_END_DEG);
-  let u = (th - ARM_START_DEG) / span;
-  let s = smoother_step(u / FLARE_SPAN);
-  var w = BAND_W_ROOT + (P.w_end - BAND_W_ROOT) * s;
+  let band = band_width(theta);
+  let s = band.y;
+  var w = band.x;
   var t = BAND_T_ROOT + (P.t_end - BAND_T_ROOT) * s;
   let tip = smooth_step((th - (ARM_END_DEG - TIP_TAPER_DEG)) / TIP_TAPER_DEG);
   w = w + (TIP_W - w) * tip;
@@ -153,7 +165,7 @@ fn ring(p: vec3f) -> f32 {
   let rho = length(p.xy);
   let rf = length(p.xz);
 
-  var body = head(p.y, rho, p.z, rf);
+  var body = head(p.x, p.y, rho, p.z, rf);
   let join = head_join();
   let fade_deg = degrees(atan2(join.x, join.y));
   for (var i = 0; i < 2; i++) {
