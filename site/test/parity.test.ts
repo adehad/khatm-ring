@@ -166,7 +166,9 @@ async function openPage(): Promise<void> {
 
 async function closePage(): Promise<void> {
   await browser.close();
-  await server.stop();
+  // The test page's hot-reload socket can outlive the browser, and a plain
+  // stop() waits for it.
+  await server.stop(true);
   await rm(scratch, { recursive: true, force: true });
 }
 
