@@ -47,6 +47,10 @@ WALL_T = 0.7
 CAVITY_LEAN = 0.6
 CAVITY_TUCK = 3.0
 CAVITY_TUCK_Z = 2.5
+HEAD_SIDE_INSET = 0.3
+HEAD_SIDE_FLARE = 0.5
+HEAD_SIDE_START_DEG = 50.0
+HEAD_SIDE_END_DEG = 70.0
 PLATE_RIM = 0.8
 PLATE_CENTRE = 0.6
 LETTER_ROUND = 0.18
@@ -74,6 +78,7 @@ K_SEAT = 0.6
 K_BOAT = 1.2
 K_LIP = 0.35
 K_CAVITY_CORNER = 0.35
+K_HEAD_SIDE = 1.0
 K_RECESS = 0.08
 K_LETTER = 0.1
 
@@ -177,7 +182,15 @@ def head_join():
     return r_wall, np.sqrt(max((R_FINGER + BAND_T_ROOT) ** 2 - r_wall**2, 0.0))
 
 
-def head(y, rho, z, rf):
+def band_width(theta, w_end):
+    """The band's width at theta degrees round from the top, before its tip
+    and wave, and how far through its flare it is (0 to 1)."""
+    u = (np.clip(theta, ARM_START_DEG, ARM_END_DEG) - ARM_START_DEG) / (ARM_END_DEG - ARM_START_DEG)
+    s = smootherstep(u / FLARE_SPAN)
+    return BAND_W_ROOT + (w_end - BAND_W_ROOT) * s, s
+
+
+def head(x, y, rho, z, rf, w_end):
     """The head: a disc with a rounded crown whose wall runs down into the band.
 
     Across the finger the wall meets the band outright. Along the finger, past
@@ -192,6 +205,15 @@ def head(y, rho, z, rf):
     u = np.clip((np.abs(y) - y0) / (FACE_D / 2 - y0), 0.0, 1.0)
     floor = R_SADDLE + (Z_TOP - BOAT_EDGE - R_SADDLE) * u**BOAT_POWER
     d = smax(d, floor - rf, np.where(u > 0, K_BOAT, K_SEAT))
+    # On a small ring the head meets the band where the band has already
+    # narrowed. Past HEAD_SIDE_START_DEG round from the top, its sides come in to
+    # HEAD_SIDE_INSET inside the band's, widening by HEAD_SIDE_FLARE per mm
+    # above the band's outside, so the shoulder fillet runs down into the band.
+    theta = np.degrees(np.arctan2(np.abs(x), z))
+    w, _ = band_width(theta, w_end)
+    off = 1 - smoothstep((theta - HEAD_SIDE_START_DEG) / (HEAD_SIDE_END_DEG - HEAD_SIDE_START_DEG))
+    reach = w / 2 - HEAD_SIDE_INSET + HEAD_SIDE_FLARE * np.maximum(rf - R_FINGER - BAND_T_ROOT, 0) + off * FACE_D
+    d = smax(d, np.abs(y) - reach, K_HEAD_SIDE)
     # Stop the wall a millimetre below where it meets the band, inside the band's metal.
     _, z_join = head_join()
     return np.maximum(d, z_join - 1.0 - z)
@@ -238,11 +260,8 @@ def arm(x, y, z, sign, rides_over, w_end, phase):
     """Distance to one arm: a rolled rounded-rectangle section swept round the finger."""
     rf = np.hypot(x, z)
     theta = np.degrees(np.arctan2(sign * x, z)) % 360.0
-    span = ARM_END_DEG - ARM_START_DEG
     th = np.clip(theta, ARM_START_DEG, ARM_END_DEG)
-    u = (th - ARM_START_DEG) / span
-    s = smootherstep(u / FLARE_SPAN)
-    w = BAND_W_ROOT + (w_end - BAND_W_ROOT) * s
+    w, s = band_width(theta, w_end)
     t = BAND_T_ROOT + (BAND_T_END - BAND_T_ROOT) * s
     tip = smoothstep((th - (ARM_END_DEG - TIP_TAPER_DEG)) / TIP_TAPER_DEG)
     w = w + (TIP_W - w) * tip
@@ -284,7 +303,7 @@ class Ring:
         rho = np.hypot(x, y)
         rf = np.hypot(x, z)
 
-        body = head(y, rho, z, rf)
+        body = head(x, y, rho, z, rf, w_end)
         # The shoulder fillet fades out below where the head meets the band,
         # which sits lower round the finger on smaller rings.
         fade_deg = np.degrees(np.arctan2(*head_join()))
