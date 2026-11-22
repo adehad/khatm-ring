@@ -10,6 +10,8 @@
     "BOAT_POWER": 2.2,
     "WALL_T": 0.7,
     "CAVITY_LEAN": 0.6,
+    "CAVITY_TUCK": 3.0,
+    "CAVITY_TUCK_Z": 2.5,
     "PLATE_RIM": 0.8,
     "PLATE_CENTRE": 0.6,
     "LETTER_ROUND": 0.18,

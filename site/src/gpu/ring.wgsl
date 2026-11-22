@@ -61,6 +61,13 @@ fn head_radius(z: f32) -> vec2f {
   return vec2f(FACE_D / 2.0 + HEAD_FLARE * u * u, 2.0 * HEAD_FLARE * u / HEAD_DROP);
 }
 
+// Where the head's wall, at its widest, meets the band's outside: (x, z).
+fn head_join() -> vec2f {
+  let r_wall = FACE_D / 2.0 + HEAD_FLARE;
+  let r_out = P.r_finger + BAND_T_ROOT;
+  return vec2f(r_wall, sqrt(max(r_out * r_out - r_wall * r_wall, 0.0)));
+}
+
 fn head(y: f32, rho: f32, z: f32, rf: f32) -> f32 {
   let wall = head_radius(z);
   let qx = (rho - wall.x) / sqrt(1.0 + wall.y * wall.y) + CROWN_R;
@@ -72,9 +79,7 @@ fn head(y: f32, rho: f32, z: f32, rf: f32) -> f32 {
   let rise = select(0.0, pow(u, BOAT_POWER), u > 0.0);
   let floor_z = P.r_saddle + (P.z_top - BOAT_EDGE - P.r_saddle) * rise;
   d = smax(d, floor_z - rf, select(K_SEAT, K_BOAT, u > 0.0));
-  let r_wall = FACE_D / 2.0 + HEAD_FLARE;
-  let r_out = P.r_finger + BAND_T_ROOT;
-  let z_join = sqrt(max(r_out * r_out - r_wall * r_wall, 0.0));
+  let z_join = head_join().y;
   return max(d, z_join - 1.0 - z);
 }
 
@@ -82,13 +87,22 @@ fn cavity(rho: f32, z: f32) -> f32 {
   let wall = head_radius(z);
   var r = wall.x;
   var slope = wall.y;
-  let x_meet = FACE_D / 2.0 + HEAD_FLARE - WALL_T + CAVITY_LEAN;
-  let z_meet = sqrt(max(P.r_finger * P.r_finger - x_meet * x_meet, 0.0));
+  let x_wall = FACE_D / 2.0 + HEAD_FLARE - WALL_T;
+  let x_meet = x_wall + CAVITY_LEAN;
+  var z_meet = sqrt(max(P.r_finger * P.r_finger - x_meet * x_meet, 0.0));
   if z_meet > 0.0 {
     let span = 2.0 * CAVITY_LEAN * x_meet / z_meet;
     let u = clamp((z_meet + span - z) / span, 0.0, 1.0);
     r = r + CAVITY_LEAN * u * u;
     slope = slope + 2.0 * CAVITY_LEAN * u / span;
+  } else {
+    z_meet = CAVITY_TUCK_Z;
+    let x_hole = sqrt(P.r_finger * P.r_finger - z_meet * z_meet);
+    let shift = x_hole - x_wall;
+    let bend = CAVITY_TUCK * z_meet / x_hole;
+    let u = clamp((z_meet + CAVITY_TUCK - z) / CAVITY_TUCK, 0.0, 1.0);
+    r = r + shift * u * u * (3.0 - 2.0 * u) + bend * u * u * (u - 1.0);
+    slope = slope + abs(shift * 6.0 * u * (1.0 - u) + bend * u * (3.0 * u - 2.0)) / CAVITY_TUCK;
   }
   var walls = (rho - (r - WALL_T)) / sqrt(1.0 + slope * slope);
   walls = max(walls, z_meet - 0.5 - z);
@@ -140,10 +154,12 @@ fn ring(p: vec3f) -> f32 {
   let rf = length(p.xz);
 
   var body = head(p.y, rho, p.z, rf);
+  let join = head_join();
+  let fade_deg = degrees(atan2(join.x, join.y));
   for (var i = 0; i < 2; i++) {
     let first = i == 0;
     let a = arm(p.x, p.y, p.z, select(-1.0, 1.0, first), !first, select(1.9, 0.0, first));
-    var k = K_SHOULDER * (1.0 - smooth_step((a.y - 55.0) / 35.0)) * smooth_step((rf - P.r_finger) / BAND_T_ROOT);
+    var k = K_SHOULDER * (1.0 - smooth_step((a.y - fade_deg) / 35.0)) * smooth_step((rf - P.r_finger) / BAND_T_ROOT);
     k = select(k, 0.0, a.y > 300.0);
     body = smin(body, a.x, k);
   }
