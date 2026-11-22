@@ -6,10 +6,13 @@ Joins therefore blend by construction: no welding, no smoothing afterwards, no
 seams where a smoothing zone ends.
 
     khatm sdf [--size "US 9"] [--target-g 5.8] [--solve] [--voxel 0.05] [--out cache/body.ply]
+    khatm sdf [--size …] [--w-end …] [--t-end …] --sample points.f32 --sample-out values.f32
 
 The size and target weight come from design/ring.toml unless given here.
 `--solve` finds the band's end width that meets the target weight before
-meshing. Prints one JSON line of stats on stdout.
+meshing. Prints one JSON line of stats on stdout. `--sample` skips meshing
+and writes the field at each float32 x, y, z triple in the input file, for
+checking another implementation of this field against this one.
 
 Units are millimetres. The finger runs along +Y, the face looks up +Z.
 Sizes are estimates from the reference photos; the constants are the knobs.
@@ -349,19 +352,30 @@ def write_ply(path, verts, normals, faces):
 
 
 def main(argv: list[str] | None = None) -> None:
+    global BAND_T_END
     params = tomllib.loads(PARAMS.read_text(encoding="utf-8"))
     ap = argparse.ArgumentParser()
     ap.add_argument("--size", default=params["size"])
     ap.add_argument("--target-g", type=float, default=params["target_g"])
     ap.add_argument("--voxel", type=float, default=0.05)
     ap.add_argument("--w-end", type=float, default=BAND_W_END)
+    ap.add_argument("--t-end", type=float, default=BAND_T_END)
     ap.add_argument("--solve", action="store_true")
     ap.add_argument("--out", default=str(BODY))
+    ap.add_argument("--sample", type=Path)
+    ap.add_argument("--sample-out", type=Path)
     a = ap.parse_args(argv)
-    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
 
+    BAND_T_END = a.t_end
     set_size(inside_diameter(a.size))
     ring = Ring()
+    if a.sample is not None:
+        if a.sample_out is None:
+            ap.error("--sample needs --sample-out")
+        x, y, z = np.fromfile(a.sample, "<f4").reshape(-1, 3).T
+        ring.sdf(x, y, z, a.w_end).astype("<f4").tofile(a.sample_out)
+        return
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     w_end, t_end = solve_band(ring, a.target_g) if a.solve else (a.w_end, BAND_T_END)
     vol, origin = ring.volume_field(a.voxel, w_end)
     verts, faces, normals, _ = marching_cubes(vol, level=0.0, spacing=(a.voxel,) * 3)

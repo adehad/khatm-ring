@@ -5,17 +5,24 @@ fixes them, slicers and the web viewer recompute them, and zeros compress far
 better. Its 80-byte header carries the stats the viewer shows, as `key=value`
 pairs, and the commit of this branch it was built from, with a "+" when the
 working tree had uncommitted changes. The file is then xz-compressed.
+
+The web viewer rebuilds the ring at other sizes on the GPU, from a port of
+ring_sdf.py. It reads that module's constants from ring-sdf.json, and the two
+face rasters (the field outline and the letters) from face-fields.f16.xz, so
+only the field's code is copied, never its numbers.
 """
 
 import json
 import lzma
 import subprocess
+import tomllib
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
-from khatm.paths import EXTRACTED, OUT, OUT_MODEL, RENDERS, ROOT, STATS, STL
+from khatm import ring_sdf, ring_size
+from khatm.paths import EXTRACTED, OUT, OUT_MODEL, PARAMS, RENDERS, ROOT, STATS, STL
 
 STL_HEADER = 80
 FACET = np.dtype([("normal", "<f4", 3), ("vertices", "<f4", (3, 3)), ("attr", "<u2")])
@@ -24,6 +31,9 @@ SHEET_TILE = 450
 SHEET_RENDERS = (("face", "three-quarter", "low-three-quarter"), ("front", "side", "underside"))
 SHEET_PHOTOS = ("02-face-inscription", "05-band-three-quarter")
 PHOTO_BACKGROUND = (236, 230, 220)
+XZ_PRESET = 9 | lzma.PRESET_EXTREME
+# Set per size by ring_sdf.set_size(), so the viewer computes them itself.
+SIZE_GLOBALS = frozenset({"INNER_D", "R_FINGER", "R_SADDLE", "Z_TOP", "Z_FIELD"})
 
 
 def build_commit() -> str:
@@ -59,6 +69,28 @@ def compact_stl(stl: bytes, stats: dict, commit: str) -> bytes:
     return header(stats, commit) + np.uint32(count).tobytes() + facets.tobytes()
 
 
+def constants(module: object, skip: frozenset[str] = frozenset()) -> dict:
+    return {
+        k: v
+        for k, v in vars(module).items()
+        if k.isupper() and k not in skip and isinstance(v, int | float | tuple | str)
+    }
+
+
+def web_sdf() -> tuple[dict, bytes]:
+    """The distance field's constants, and its two face rasters as little-endian float16."""
+    ring = ring_sdf.Ring()
+    rasters = np.stack([ring.field.sdf, ring.letters.sdf]).astype("<f2")
+    params = tomllib.loads(PARAMS.read_text(encoding="utf-8"))
+    spec = {
+        "sdf": constants(ring_sdf, SIZE_GLOBALS),
+        "ring_size": constants(ring_size),
+        "target_g": params["target_g"],
+        "face_rasters": {"layers": ["field", "letters"], "rows": rasters.shape[1], "cols": rasters.shape[2]},
+    }
+    return spec, rasters.tobytes()
+
+
 def photo_tile(name: str) -> Image.Image:
     """A reference cut-out, cropped square around the ring, on a plain background."""
     cut = Image.open(EXTRACTED / f"{name}.png").convert("RGBA")
@@ -92,9 +124,15 @@ def main() -> None:
         raise SystemExit(f"{OUT} is not a worktree of main; run: git worktree add out main")
     stats = json.loads(STATS.read_text(encoding="utf-8"))
     OUT_MODEL.mkdir(parents=True, exist_ok=True)
-    packed = lzma.compress(compact_stl(STL.read_bytes(), stats, build_commit()), preset=9 | lzma.PRESET_EXTREME)
+    packed = lzma.compress(compact_stl(STL.read_bytes(), stats, build_commit()), preset=XZ_PRESET)
     (OUT_MODEL / "khatm-ring.stl.xz").write_bytes(packed)
     print(f"khatm-ring.stl.xz  {len(packed) / 1e6:.2f} MB")
+
+    spec, rasters = web_sdf()
+    (OUT_MODEL / "ring-sdf.json").write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8", newline="\n")
+    packed = lzma.compress(rasters, preset=XZ_PRESET)
+    (OUT_MODEL / "face-fields.f16.xz").write_bytes(packed)
+    print(f"face-fields.f16.xz  {len(packed) / 1e6:.2f} MB")
 
     renders = OUT_MODEL / "renders"
     renders.mkdir(exist_ok=True)

@@ -21,6 +21,7 @@ The build needs Blender 4.5 LTS. Put `blender` on `PATH`, or set `BLENDER` to it
 | `khatm build [--render]` | Runs Blender headless: meshes the ring, dresses it, exports, then publishes to `out/` |
 | `khatm publish` | Compresses the cached STL and renders into `out/model/` |
 | `khatm sdf [--size …] [--target-g …]` | Meshes the distance field alone, for trying constants |
+| `khatm sdf --sample in.f32 --sample-out out.f32` | Writes the field at given points, for checking the viewer's GPU port |
 | `khatm live-build` | Rebuilds in a live Blender and adds the Khatm sidebar tab |
 | `khatm live file.py` or `-c CODE` | Runs a snippet in a live Blender; it can `import khatm` |
 
@@ -107,5 +108,8 @@ It counts metal on a 0.1 mm grid in seconds, then meshes at 0.05 mm. The build w
 
 - `model/khatm-ring.stl.xz` is the STL, xz-compressed. Its per-facet normals are zeroed, which shrinks the file from 6.2 MB to 2.45 MB. Its 80-byte header holds `key=value` pairs the viewer reads: `build`, `field_z`, `grams`, `inside_d`, `us` and `uk`. `build` is this branch's short commit hash, with a `+` if the tree had uncommitted changes.
 - `model/renders/*.webp` are the renders, if the build made them, and `contact-sheet.webp` puts them beside two of the reference photos.
+- `model/ring-sdf.json` and `model/face-fields.f16.xz` are what the viewer needs to rebuild the ring at other sizes. The JSON holds `ring_sdf.py`'s constants, the size scales and the target weight. The xz file holds the two face rasters, the field outline and the letters, as float16.
 
 Commit on this branch first, so the `build` stamp names a real commit. Then review and commit the new files in `out/`.
+
+The viewer on `main` has its own copy of the field's code, in WGSL. Its CI checks that copy against `ring_sdf.py` at the commit the STL's `build` stamp names, so a change to the field's code here needs the same change there.
