@@ -51,27 +51,55 @@ function describe(info: RingInfo, built: BuiltRing | undefined): string {
   return `${info.grams.toFixed(2)} g${short} · US ${info.us} · UK ${info.uk} · ${info.insideDiameter.toFixed(1)} mm inside`;
 }
 
-function sizeLabel(spec: RingSpec, diameter: number): string {
-  const names = sizeNames(spec.ringSize, diameter);
-  return `US ${names.us} · UK ${names.uk} · ${diameter.toFixed(1)} mm`;
+const COLUMNS = ["US", "UK", "mm", ""] as const;
+
+function cell(text: string): HTMLSpanElement {
+  const span = document.createElement("span");
+  span.textContent = text;
+  return span;
 }
 
-function sizeButton(value: string, text: string): HTMLButtonElement {
+/** One row of the size table: a button whose cells line up under `COLUMNS`. */
+function sizeRow(spec: RingSpec, value: string, diameter: number, published: boolean): HTMLButtonElement {
+  const names = sizeNames(spec.ringSize, diameter);
+  const uk = names.uk.replace("1/2", "½");
+  const mm = diameter.toFixed(2);
   const button = document.createElement("button");
   button.type = "button";
   button.value = value;
-  button.textContent = text;
-  button.setAttribute("aria-pressed", String(value === PUBLISHED));
+  button.setAttribute("aria-pressed", String(published));
+  button.setAttribute("aria-label", `US ${names.us}, UK ${uk}, ${mm} mm${published ? ", as published" : ""}`);
+  const tag = cell(published ? "published" : "");
+  tag.className = "tag";
+  button.append(cell(names.us), cell(uk), cell(mm), tag);
   return button;
 }
 
-function sizeButtons(spec: RingSpec, published: RingInfo): HTMLButtonElement[] {
-  const buttons = [sizeButton(PUBLISHED, `${sizeLabel(spec, published.insideDiameter)} (as published)`)];
+function sizeTable(spec: RingSpec, published: RingInfo): HTMLElement[] {
+  const head = document.createElement("div");
+  head.className = "head";
+  head.setAttribute("aria-hidden", "true");
+  head.append(...COLUMNS.map((name) => cell(name)));
+  const rows = [{ value: PUBLISHED, diameter: published.insideDiameter }];
   for (let us = US_SIZES.first; us <= US_SIZES.last; us += US_SIZES.step) {
+    // The published ring takes the place of the US size it rounds to.
+    if (String(us) === published.us) continue;
     const d = usDiameter(spec.ringSize, us);
-    buttons.push(sizeButton(d.toFixed(4), sizeLabel(spec, d)));
+    rows.push({ value: d.toFixed(4), diameter: d });
   }
-  return buttons;
+  rows.sort((a, b) => a.diameter - b.diameter);
+  return [head, ...rows.map((row) => sizeRow(spec, row.value, row.diameter, row.value === PUBLISHED))];
+}
+
+/** Opens the table with the chosen row in the middle, so the sizes either side show too. */
+function centreChosen(sizes: HTMLElement): void {
+  sizes.addEventListener("toggle", (event) => {
+    if (!(event instanceof ToggleEvent) || event.newState !== "open") return;
+    const chosen = sizes.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
+    if (chosen === null) return;
+    sizes.scrollTop = chosen.offsetTop - (sizes.clientHeight - chosen.offsetHeight) / 2;
+    chosen.focus({ preventScroll: true });
+  });
 }
 
 type Present = (ring: LoadedRing, built?: BuiltRing) => void;
@@ -148,7 +176,8 @@ export async function initRingControls(controls: RingControls): Promise<void> {
     return;
   }
   const spec = await loadRingSpec(linkedUrl("ring-sdf"), linkedUrl("face-fields"));
-  controls.sizes.replaceChildren(...sizeButtons(spec, controls.published.info));
+  controls.sizes.replaceChildren(...sizeTable(spec, controls.published.info));
+  centreChosen(controls.sizes);
   controls.sizeButton.disabled = false;
   listenForSizes(spec, controls, present);
 }
