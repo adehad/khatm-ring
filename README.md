@@ -95,12 +95,13 @@ The dimensions are estimates from the photos. Change them with the constants at 
 
 ## Weight
 
-The solver weighs the ring at sterling's density, `DENSITY_G_MM3`. `main`'s README explains the two-dirham limit behind 5.8 g. `khatm sdf --solve`, which the build runs, changes only the band's ends, so the head and shoulders keep their shape:
+The solver weighs the ring at sterling's density, `DENSITY_G_MM3`. `main`'s README explains the two-dirham limit behind 5.8 g. `khatm sdf --solve`, which the build runs, keeps the head and shoulders' shape:
 
-1. It widens or narrows the ends within `BAND_W_END_RANGE`.
-2. If the width hits its limit, it thickens or thins them within `BAND_T_END_RANGE`. Small sizes need this: at US 6 the ends come out 5.0 mm wide and 1.16 mm thick.
+1. It widens or narrows the band's ends within `BAND_W_END_RANGE`.
+2. If the ends are as wide as they go and the ring is still light, as on small sizes, it thickens the plate under the face within `PLATE_EXTRA_RANGE`, so the extra metal sits under the crown and the band stays slim. US 4 takes 0.25 mm.
+3. If the ends are as narrow as they go and the ring is still heavy, it thins them within `BAND_T_END_RANGE`.
 
-It counts metal on a 0.1 mm grid in seconds, then meshes at 0.05 mm. The build warns if neither change reaches the target.
+It counts metal on a 0.1 mm grid in seconds, then meshes at 0.05 mm. The build warns if the ring misses the target, which leaves it lighter, never heavier.
 
 ## Publishing
 

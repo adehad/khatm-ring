@@ -6,13 +6,14 @@ Joins therefore blend by construction: no welding, no smoothing afterwards, no
 seams where a smoothing zone ends.
 
     khatm sdf [--size "US 9"] [--target-g 5.8] [--solve] [--voxel 0.05] [--out cache/body.ply]
-    khatm sdf [--size …] [--w-end …] [--t-end …] --sample points.f32 --sample-out values.f32
+    khatm sdf [--size …] [--w-end …] [--t-end …] [--plate-extra …] --sample points.f32 --sample-out values.f32
 
 The size and target weight come from design/ring.toml unless given here.
 `--solve` finds the band's end width that meets the target weight before
-meshing. Prints one JSON line of stats on stdout. `--sample` skips meshing
-and writes the field at each float32 x, y, z triple in the input file, for
-checking another implementation of this field against this one.
+meshing, and on a ring too small for the band alone, the plate thickness.
+Prints one JSON line of stats on stdout. `--sample` skips meshing and writes
+the field at each float32 x, y, z triple in the input file, for checking
+another implementation of this field against this one.
 
 Units are millimetres. The finger runs along +Y, the face looks up +Z.
 Sizes are estimates from the reference photos; the constants are the knobs.
@@ -57,6 +58,8 @@ HEAD_SIDE_START_DEG = 50.0
 HEAD_SIDE_END_DEG = 70.0
 PLATE_RIM = 0.8
 PLATE_CENTRE = 0.6
+PLATE_EXTRA = 0.0
+PLATE_EXTRA_RANGE = (0.0, 0.5)
 LETTER_ROUND = 0.18
 
 BAND_T_ROOT = 1.3
@@ -264,7 +267,8 @@ def head(x, y, rho, z, rf, w_end):
 
 def cavity(rho, z):
     """The open back: the head's wall offset in by WALL_T, under a domed ceiling
-    that leaves PLATE_RIM of plate at its edge and PLATE_CENTRE in the middle."""
+    that leaves PLATE_RIM of plate at its edge and PLATE_CENTRE in the middle,
+    each thickened by PLATE_EXTRA when the band alone is too light."""
     r, slope = head_radius(z)
     # Low down the wall leans out by CAVITY_LEAN and reaches the finger hole
     # along its tangent, so the two run into each other without a ridge.
@@ -286,7 +290,7 @@ def cavity(rho, z):
     walls = np.maximum(walls, z_meet - 0.5 - z)
     r_c = FACE_D / 2 - WALL_T
     dome = (PLATE_RIM - PLATE_CENTRE) / r_c**2
-    ceiling = Z_FIELD - PLATE_CENTRE - dome * rho**2
+    ceiling = Z_FIELD - PLATE_CENTRE - PLATE_EXTRA - dome * rho**2
     under = (z - ceiling) / np.sqrt(1 + (2 * dome * rho) ** 2)
     return smax(walls, under, K_CAVITY_CORNER)
 
@@ -349,11 +353,8 @@ class Ring:
         for sign, rides, phase in ((1, False, 0.0), (-1, True, 1.9)):
             d, theta = arm(x, y, z, sign, rides, w_end, phase)
             # Full fillet on the outside; none at the finger, where it would swell into the hole.
-            k = (
-                K_SHOULDER
-                * (1 - smoothstep((theta - fade_deg) / SHOULDER_FADE_DEG))
-                * smoothstep((rf - R_FINGER) / BAND_T_ROOT)
-            )
+            fade = 1 - smoothstep((theta - fade_deg) / SHOULDER_FADE_DEG)
+            k = K_SHOULDER * fade * smoothstep((rf - R_FINGER) / BAND_T_ROOT)
             k = np.where(theta > 300.0, 0.0, k)
             body = smin(body, d, k)
         body = smax(body, -cavity(rho, z), K_LIP)
@@ -402,20 +403,30 @@ def secant(volume, x0, step, bounds, target):
 
 
 def solve_band(ring, target_g, h=0.1):
-    """Meet the target weight with the band's end width; once that reaches its
-    limit, carry on with the end thickness. Returns (width, thickness)."""
-    global BAND_T_END
+    """Meet the target weight with the band's end width. If the band is still
+    too light at its widest, thicken the plate under the face; if too heavy at
+    its narrowest, thin the band's ends. Past those limits the ring misses the
+    target. Returns (width, thickness, plate extra)."""
+    global BAND_T_END, PLATE_EXTRA
     target = target_g / DENSITY_G_MM3
     w, v = secant(lambda w: ring.volume_mm3(h, w), BAND_W_END, 0.5, BAND_W_END_RANGE, target)
-    if abs(v - target) > 1.0 and w in BAND_W_END_RANGE:
+    if abs(v - target) > 1.0 and w == BAND_W_END_RANGE[1]:
 
-        def volume(t):
+        def plate(extra):
+            global PLATE_EXTRA
+            PLATE_EXTRA = extra
+            return ring.volume_mm3(h, w)
+
+        PLATE_EXTRA, _ = secant(plate, PLATE_EXTRA, 0.1, PLATE_EXTRA_RANGE, target)
+    elif abs(v - target) > 1.0 and w == BAND_W_END_RANGE[0]:
+
+        def thickness(t):
             global BAND_T_END
             BAND_T_END = t
             return ring.volume_mm3(h, w)
 
-        BAND_T_END, _ = secant(volume, BAND_T_END, 0.1, BAND_T_END_RANGE, target)
-    return w, BAND_T_END
+        BAND_T_END, _ = secant(thickness, BAND_T_END, 0.1, BAND_T_END_RANGE, target)
+    return w, BAND_T_END, PLATE_EXTRA
 
 
 def write_ply(path, verts, normals, faces):
@@ -436,7 +447,7 @@ def write_ply(path, verts, normals, faces):
 
 
 def main(argv: list[str] | None = None) -> None:
-    global BAND_T_END
+    global BAND_T_END, PLATE_EXTRA
     params = tomllib.loads(PARAMS.read_text(encoding="utf-8"))
     ap = argparse.ArgumentParser()
     ap.add_argument("--size", default=params["size"])
@@ -444,6 +455,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--voxel", type=float, default=0.05)
     ap.add_argument("--w-end", type=float, default=BAND_W_END)
     ap.add_argument("--t-end", type=float, default=BAND_T_END)
+    ap.add_argument("--plate-extra", type=float, default=PLATE_EXTRA)
     ap.add_argument("--solve", action="store_true")
     ap.add_argument("--out", default=str(BODY))
     ap.add_argument("--sample", type=Path)
@@ -451,6 +463,7 @@ def main(argv: list[str] | None = None) -> None:
     a = ap.parse_args(argv)
 
     BAND_T_END = a.t_end
+    PLATE_EXTRA = a.plate_extra
     set_size(inside_diameter(a.size))
     ring = Ring()
     if a.sample is not None:
@@ -460,7 +473,7 @@ def main(argv: list[str] | None = None) -> None:
         ring.sdf(x, y, z, a.w_end).astype("<f4").tofile(a.sample_out)
         return
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    w_end, t_end = solve_band(ring, a.target_g) if a.solve else (a.w_end, BAND_T_END)
+    w_end, t_end, plate = solve_band(ring, a.target_g) if a.solve else (a.w_end, BAND_T_END, PLATE_EXTRA)
     vol, origin = ring.volume_field(a.voxel, w_end)
     verts, faces, normals, _ = marching_cubes(vol, level=0.0, spacing=(a.voxel,) * 3)
     verts += np.asarray(origin, np.float32)
@@ -475,12 +488,15 @@ def main(argv: list[str] | None = None) -> None:
         "grams_925": round(v * DENSITY_G_MM3, 3),
         "band_end_width_mm": round(w_end, 2),
         "band_end_thickness_mm": round(t_end, 2),
+        "plate_extra_mm": round(plate, 3),
         "z_field": Z_FIELD,
         "faces": len(faces),
         "mesh": a.out,
     }
     if a.solve and abs(stats["grams_925"] - a.target_g) > 0.05:
-        stats["warning"] = f"cannot reach {a.target_g} g at this size: band ends {w_end:.2f} x {t_end:.2f} mm"
+        stats["warning"] = (
+            f"cannot reach {a.target_g} g at this size: band ends {w_end:.2f} x {t_end:.2f} mm, plate +{plate:.2f} mm"
+        )
     print(json.dumps(stats))
 
 
