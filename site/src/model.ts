@@ -2,10 +2,10 @@ import * as THREE from "three";
 import { XzReadableStream } from "xz-decompress";
 import { Group, parseRingStl, type RingInfo } from "./stl.ts";
 
-// index.html preloads the model; the build renames it after its content hash.
-function modelUrl(): string {
-  const link = document.querySelector<HTMLLinkElement>("link#model");
-  if (link === null) throw new Error('index.html needs <link id="model">');
+// index.html links each model file; the build renames them after their content hash.
+export function linkedUrl(id: string): string {
+  const link = document.querySelector<HTMLLinkElement>(`link#${id}`);
+  if (link === null) throw new Error(`index.html needs <link id="${id}">`);
   return link.href;
 }
 
@@ -44,13 +44,16 @@ function readWithProgress(response: Response, onProgress: (fraction: number) => 
   return new Response(counted);
 }
 
+export function ringFromStl(stl: ArrayBuffer): LoadedRing {
+  const { geometry, info } = parseRingStl(stl);
+  return { mesh: new THREE.Mesh(geometry, materials()), info, stl };
+}
+
 export async function loadRing(onProgress: (fraction: number) => void): Promise<LoadedRing> {
-  const url = modelUrl();
+  const url = linkedUrl("model");
   const response = await fetch(url);
   if (!response.ok || response.body === null) throw new Error(`${url}: HTTP ${response.status}`);
   const counted = readWithProgress(response, onProgress);
   if (counted.body === null) throw new Error(`${url}: empty response`);
-  const stl = await new Response(new XzReadableStream(counted.body)).arrayBuffer();
-  const { geometry, info } = parseRingStl(stl);
-  return { mesh: new THREE.Mesh(geometry, materials()), info, stl };
+  return ringFromStl(await new Response(new XzReadableStream(counted.body)).arrayBuffer());
 }

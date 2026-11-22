@@ -3,12 +3,12 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createDesert } from "./desert.ts";
 import { placeIcons } from "./icons.ts";
 import { loadRing, type LoadedRing } from "./model.ts";
+import { initRingControls } from "./ring-controls.ts";
 import { createStars, Sky, type SkyColors } from "./sky.ts";
 import { studioEnvironment } from "./studio.ts";
 import { initThemeToggle, resolvedScheme, type Scheme } from "./theme.ts";
 import { CameraFlight, isViewName, VIEWS } from "./views.ts";
 
-const REPO_URL = "https://github.com/adehad/khatm-ring";
 const FLOAT_MM = 10;
 const CAMERA_CLEARANCE_MM = 2;
 
@@ -131,47 +131,6 @@ for (const button of document.querySelectorAll<HTMLButtonElement>("[data-view]")
   });
 }
 
-// Links the build commit the model came from. A "+" means it was built with
-// uncommitted changes, so no commit matches it exactly.
-function showBuild(commit: string): void {
-  const sha = commit.replace(/\+$/u, "");
-  const link = document.createElement("a");
-  link.href = `${REPO_URL}/commit/${sha}`;
-  link.textContent = sha;
-  build.replaceChildren("Built from ", link, sha === commit ? "" : " with local changes");
-}
-
-function showRing({ mesh, info, stl }: LoadedRing): void {
-  scene.add(mesh);
-  const box = mesh.geometry.boundingBox;
-  if (box !== null) {
-    groundY = box.min.y - FLOAT_MM;
-    desert.group.position.y = groundY;
-  }
-  details.textContent = `${info.grams.toFixed(2)} g · US ${info.us} · UK ${info.uk} · ${info.insideDiameter.toFixed(1)} mm inside`;
-  showBuild(info.build);
-  const url = URL.createObjectURL(new Blob([stl], { type: "model/stl" }));
-  download.addEventListener("click", () => {
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "khatm-ring.stl";
-    a.click();
-  });
-  download.disabled = false;
-  status.textContent = "";
-}
-
-try {
-  showRing(
-    await loadRing((fraction) => {
-      status.textContent = `Loading model… ${Math.round(fraction * 100)}%`;
-    }),
-  );
-} catch (error: unknown) {
-  status.textContent = "Could not load the model.";
-  console.error(error);
-}
-
 function resize(): void {
   renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
   camera.aspect = canvas.clientWidth / canvas.clientHeight;
@@ -190,3 +149,39 @@ renderer.setAnimationLoop((now: number) => {
   camera.position.y = Math.max(camera.position.y, groundY + CAMERA_CLEARANCE_MM);
   renderer.render(scene, camera);
 });
+
+let shown: THREE.Mesh | undefined;
+
+function showRing({ mesh }: LoadedRing): void {
+  if (shown !== undefined) {
+    scene.remove(shown);
+    shown.geometry.dispose();
+  }
+  shown = mesh;
+  scene.add(mesh);
+  const box = mesh.geometry.boundingBox;
+  if (box !== null) {
+    groundY = box.min.y - FLOAT_MM;
+    desert.group.position.y = groundY;
+  }
+}
+
+try {
+  const published = await loadRing((fraction) => {
+    status.textContent = `Loading model… ${Math.round(fraction * 100)}%`;
+  });
+  await initRingControls({
+    published,
+    details,
+    build,
+    download,
+    size: byId("size", HTMLSelectElement),
+    show: showRing,
+    status: (text) => {
+      status.textContent = text;
+    },
+  });
+} catch (error: unknown) {
+  if (shown === undefined) status.textContent = "Could not load the model.";
+  console.error(error);
+}

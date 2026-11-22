@@ -25,9 +25,42 @@ jobs:
         with:
           path: site/dist
 
+  # The viewer's WGSL port of the ring's distance field, against ring_sdf.py at
+  # the build commit the published STL names.
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - id: model
+        run: |
+          header=$(xz -dc model/khatm-ring.stl.xz | head -c 80)
+          commit=$(sed -n 's/.*build=\([^ ]*\).*/\1/p' <<<"$header")
+          if [[ -z "$commit" || "$commit" == *+ ]]; then
+            echo "::error::the STL names no clean build commit: $header"
+            exit 1
+          fi
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: build
+          fetch-depth: 0
+          path: build-branch
+      - run: git -C build-branch checkout --detach ${{ steps.model.outputs.commit }}
+      - uses: astral-sh/setup-uv@v10
+      - uses: oven-sh/setup-bun@v2
+      - working-directory: site
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps --no-shell chromium
+      - working-directory: site
+        env:
+          KHATM_BUILD: ${{ github.workspace }}/build-branch
+          KHATM_SWIFTSHADER: "1"
+        run: bun test
+
   deploy:
     if: github.event_name != 'pull_request'
-    needs: build
+    needs: [build, parity]
     runs-on: ubuntu-latest
     permissions:
       pages: write

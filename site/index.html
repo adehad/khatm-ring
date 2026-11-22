@@ -14,6 +14,8 @@
     <link rel="icon" href="data:," />
     <meta name="description" content="An interactive 3D model of a sterling silver seal ring." />
     <link id="model" rel="preload" href="khatm-ring.stl.xz" as="fetch" crossorigin="anonymous" />
+    <link id="ring-sdf" rel="prefetch" href="ring-sdf.json" as="fetch" crossorigin="anonymous" />
+    <link id="face-fields" rel="prefetch" href="face-fields.f16.xz" as="fetch" crossorigin="anonymous" />
     <link rel="stylesheet" href="./src/style.css" />
     <script type="module" src="./src/main.ts"></script>
   </head>
@@ -40,6 +42,12 @@
         <button type="button" data-view="side">Side</button>
         <button type="button" data-view="underside">Underside</button>
       </div>
+      <label class="group size" data-icon="ruler">
+        <span class="visually-hidden">Ring size</span>
+        <select id="size" disabled>
+          <option>Size</option>
+        </select>
+      </label>
       <div class="group">
         <button type="button" id="spin" data-icon="spin" aria-pressed="true">Spin</button>
         <button type="button" id="theme">

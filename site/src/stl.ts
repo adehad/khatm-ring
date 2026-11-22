@@ -26,6 +26,44 @@ export interface RingMesh {
 // Material slots on the geometry's groups.
 export const Group = { Silver: 0, Field: 1 } as const;
 
+const HEADER_KEYS = ["build", "field_z", "grams", "inside_d", "us", "uk"] as const;
+
+function headerText(info: RingInfo): string {
+  const values: Record<(typeof HEADER_KEYS)[number], string> = {
+    build: info.build,
+    field_z: info.fieldZ.toFixed(4),
+    grams: info.grams.toFixed(2),
+    inside_d: info.insideDiameter.toFixed(2),
+    us: info.us,
+    uk: info.uk,
+  };
+  return `khatm ${HEADER_KEYS.map((key) => `${key}=${values[key]}`).join(" ")}`;
+}
+
+/** A binary STL in the build's format: header pairs, zeroed normals. */
+export function writeRingStl(positions: Float32Array, indices: Uint32Array, info: RingInfo): ArrayBuffer {
+  const text = headerText(info);
+  if (text.length > HEADER_BYTES)
+    throw new Error(`STL header is ${text.length} bytes, over ${HEADER_BYTES}: ${text}`);
+  const facets = indices.length / 3;
+  const buffer = new ArrayBuffer(HEADER_BYTES + 4 + facets * FACET_BYTES);
+  const bytes = new Uint8Array(buffer);
+  bytes.fill(" ".codePointAt(0) ?? 0, 0, HEADER_BYTES);
+  new TextEncoder().encodeInto(text, bytes);
+  const view = new DataView(buffer);
+  view.setUint32(HEADER_BYTES, facets, true);
+  for (let f = 0; f < facets; f++) {
+    const base = HEADER_BYTES + 4 + f * FACET_BYTES + 12;
+    for (let corner = 0; corner < 3; corner++) {
+      const v = (indices[f * 3 + corner] ?? 0) * 3;
+      for (let axis = 0; axis < 3; axis++) {
+        view.setFloat32(base + (corner * 3 + axis) * 4, positions[v + axis] ?? 0, true);
+      }
+    }
+  }
+  return buffer;
+}
+
 function parseHeader(bytes: Uint8Array): RingInfo {
   const text = new TextDecoder("ascii").decode(bytes.subarray(0, HEADER_BYTES));
   const pairs = new Map(
@@ -55,7 +93,7 @@ function parseHeader(bytes: Uint8Array): RingInfo {
 // Merges the corners STL repeats for every facet, so normals can be smoothed
 // across facets. Keys are the exact float bits: the mesher writes shared
 // corners identically.
-class VertexWelder {
+export class VertexWelder {
   private readonly slots: Int32Array;
   private readonly mask: number;
   private readonly positions: Float32Array;
@@ -128,6 +166,10 @@ function splitFacets(view: DataView, facets: number, fieldZ: number): SplitFacet
     );
   }
   return { vertices: welder.vertices(), silver, field };
+}
+
+export function facetCount(stl: ArrayBuffer): number {
+  return new DataView(stl).getUint32(HEADER_BYTES, true);
 }
 
 export function parseRingStl(buffer: ArrayBuffer): RingMesh {

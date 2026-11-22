@@ -17,6 +17,7 @@ A sterling silver seal ring (khatm), modelled for casting. The round face carrie
 | Path | Contents |
 |---|---|
 | `model/khatm-ring.stl.xz` | The ring for casting, as one closed binary STL in millimetres, xz-compressed |
+| `model/ring-sdf.json`, `model/face-fields.f16.xz` | The distance field's constants and face rasters, for rebuilding at other sizes |
 | `model/renders/` | Cycles renders and the contact sheet above |
 | `site/` | The 3D viewer, published to GitHub Pages |
 
@@ -51,14 +52,33 @@ The weight comes from the model's volume, not from a casting. Sprue position, po
 
 `site/` is a TypeScript three.js page built with bun. The ring floats 10 mm above rippled sand, lit by six warm softboxes and two more above and below it. The page unpacks the STL in the browser. It darkens every upward facet at the `field_z` height in the STL's header, which is the recessed field, and links the build commit under the title.
 
-GitHub Pages serves every file with a 10-minute cache. Bun names the JS and CSS after a hash of their content, and `build.ts` does the same for the model (`khatm-ring.<hash>.stl.xz`). Only `index.html` keeps its name, so a deploy reaches visitors within 10 minutes, and a model that didn't change stays cached.
-
 ```sh
 cd site
 bun install
-bun run dev     # serves the page and ../model/khatm-ring.stl.xz
+bun run dev     # serves the page and the files in ../model/
 bun run check   # tsc, oxlint (type-aware), oxfmt
 bun run build   # writes dist/, which .github/workflows/pages.yml publishes
 ```
 
 Hooks in `.pre-commit-config.yaml` run the same checks before each commit: `uvx prek install` (or `pre-commit install`).
+
+### Other sizes
+
+The size picker rebuilds the ring in the browser, on the GPU, in a few seconds. It needs WebGPU. Without it the page shows the published size only.
+
+1. `src/gpu/ring.wgsl` is a port of the build branch's `ring_sdf.py`. Its constants come from `model/ring-sdf.json` and its face rasters from `model/face-fields.f16.xz`, so only the code is copied.
+2. The band's end width, then its thickness, is solved for the target weight, as the build does.
+3. Marching cubes runs on the GPU at 0.05 mm, a slab at a time.
+4. meshoptimizer cuts the mesh to about the published STL's facet count.
+
+The STL button then downloads that ring, with the same header as the published one. It names the build commit, but the mesh came from the port, not from Blender. Check a rebuilt STL in a slicer, or with the caster, before casting it.
+
+`test/parity.test.ts` runs the port in Chromium and compares it with `ring_sdf.py`. It checks the field at random points, the band solve and volume at three sizes, and that a rebuilt mesh is closed. CI runs it on a software GPU against the build commit the STL names.
+
+```sh
+KHATM_BUILD=../build-checkout bun test   # needs uv; KHATM_SWIFTSHADER=1 without a GPU
+```
+
+### Caching
+
+GitHub Pages serves every file with a 10-minute cache. Bun names the JS and CSS after a hash of their content, and `build.ts` does the same for the three model files. Only `index.html` keeps its name, so a deploy reaches visitors within 10 minutes, and a model that didn't change stays cached.

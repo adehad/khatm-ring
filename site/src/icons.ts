@@ -1,9 +1,10 @@
-import { createElement, Download, Moon, RotateCw, Sun, type IconNode } from "lucide";
+import { createElement, Download, Moon, RotateCw, Ruler, Sun, type IconNode } from "lucide";
 
-// Buttons name their icon with data-icon; the icon goes before the label.
+// Controls name their icon with data-icon; the icon goes before the label.
 const ICONS: Readonly<Record<string, IconNode>> = {
   download: Download,
   moon: Moon,
+  ruler: Ruler,
   spin: RotateCw,
   sun: Sun,
 };
