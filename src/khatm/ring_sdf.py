@@ -47,6 +47,10 @@ WALL_T = 0.7
 CAVITY_LEAN = 0.6
 CAVITY_TUCK = 3.0
 CAVITY_TUCK_Z = 2.5
+HEAD_TUCK = 3.0
+HEAD_TUCK_Z = 2.5
+HEAD_BURY = 0.2
+HEAD_BURY_DEG = 10.0
 HEAD_SIDE_INSET = 0.3
 HEAD_SIDE_FLARE = 0.5
 HEAD_SIDE_START_DEG = 50.0
@@ -74,6 +78,7 @@ RIDE_END_DEG = 155.0
 OVERLAP_GAP = 0.35
 
 K_SHOULDER = 1.5
+SHOULDER_FADE_DEG = 35.0
 K_SEAT = 0.6
 K_BOAT = 1.2
 K_LIP = 0.35
@@ -176,18 +181,44 @@ def head_radius(z):
     return FACE_D / 2 + HEAD_FLARE * u * u, 2 * HEAD_FLARE * u / HEAD_DROP
 
 
-def head_join():
-    """Where the head's wall, at its widest, meets the band's outside: (x, z)."""
-    r_wall = FACE_D / 2 + HEAD_FLARE
-    return r_wall, np.sqrt(max((R_FINGER + BAND_T_ROOT) ** 2 - r_wall**2, 0.0))
+def tuck(z, x_from, x_meet, z_meet, span):
+    """A wall at x_from curving in over span to meet a circle round the finger
+    at (x_meet, z_meet) along its tangent: a cubic with no slope at the top.
+    Returns the change in radius at height z, and in its slope."""
+    shift = x_meet - x_from
+    bend = span * z_meet / x_meet
+    u = np.clip((z_meet + span - z) / span, 0.0, 1.0)
+    dr = shift * u * u * (3 - 2 * u) + bend * u * u * (u - 1)
+    return dr, np.abs(shift * 6 * u * (1 - u) + bend * u * (3 * u - 2)) / span
 
 
-def band_width(theta, w_end):
-    """The band's width at theta degrees round from the top, before its tip
-    and wave, and how far through its flare it is (0 to 1)."""
+def band_flare(theta):
+    """How far the band is through its flare from root to end at theta degrees
+    round from the top, 0 to 1."""
     u = (np.clip(theta, ARM_START_DEG, ARM_END_DEG) - ARM_START_DEG) / (ARM_END_DEG - ARM_START_DEG)
-    s = smootherstep(u / FLARE_SPAN)
-    return BAND_W_ROOT + (w_end - BAND_W_ROOT) * s, s
+    return smootherstep(u / FLARE_SPAN)
+
+
+def band_thickness(theta):
+    """The band's thickness at theta degrees, before its tip."""
+    return BAND_T_ROOT + (BAND_T_END - BAND_T_ROOT) * band_flare(theta)
+
+
+def head_join():
+    """Where the head's wall meets the band's outside: (x, z). On a finger so
+    small that the wall at its widest would meet the band lower than
+    HEAD_TUCK_Z, the wall tucks in to meet it there instead, where the band
+    has already thinned a little."""
+    r_wall = FACE_D / 2 + HEAD_FLARE
+    r_out = R_FINGER + BAND_T_ROOT
+    z_join = np.sqrt(max(r_out**2 - r_wall**2, 0.0))
+    if z_join >= HEAD_TUCK_Z:
+        return r_wall, z_join
+    x = np.sqrt(r_out**2 - HEAD_TUCK_Z**2)
+    for _ in range(4):
+        r_out = R_FINGER + band_thickness(np.degrees(np.arctan2(x, HEAD_TUCK_Z)))
+        x = np.sqrt(r_out**2 - HEAD_TUCK_Z**2)
+    return float(x), HEAD_TUCK_Z
 
 
 def head(x, y, rho, z, rf, w_end):
@@ -198,6 +229,11 @@ def head(x, y, rho, z, rf, w_end):
     BOAT_EDGE under the face edge, so from the side the head is boat-shaped.
     """
     r, slope = head_radius(z)
+    x_join, z_join = head_join()
+    r_wall = FACE_D / 2 + HEAD_FLARE
+    if x_join < r_wall:
+        dr, dslope = tuck(z, r_wall, x_join, z_join, HEAD_TUCK)
+        r, slope = r + dr, slope + dslope
     qx = (rho - r) / np.sqrt(1 + slope**2) + CROWN_R
     qz = z - Z_TOP + CROWN_R
     d = np.minimum(np.maximum(qx, qz), 0) + np.hypot(np.maximum(qx, 0), np.maximum(qz, 0)) - CROWN_R
@@ -210,13 +246,20 @@ def head(x, y, rho, z, rf, w_end):
     # HEAD_SIDE_INSET inside the band's, widening by HEAD_SIDE_FLARE per mm
     # above the band's outside, so the shoulder fillet runs down into the band.
     theta = np.degrees(np.arctan2(np.abs(x), z))
-    w, _ = band_width(theta, w_end)
+    w = BAND_W_ROOT + (w_end - BAND_W_ROOT) * band_flare(theta)
     off = 1 - smoothstep((theta - HEAD_SIDE_START_DEG) / (HEAD_SIDE_END_DEG - HEAD_SIDE_START_DEG))
     reach = w / 2 - HEAD_SIDE_INSET + HEAD_SIDE_FLARE * np.maximum(rf - R_FINGER - BAND_T_ROOT, 0) + off * FACE_D
     d = smax(d, np.abs(y) - reach, K_HEAD_SIDE)
     # Stop the wall a millimetre below where it meets the band, inside the band's metal.
-    _, z_join = head_join()
-    return np.maximum(d, z_join - 1.0 - z)
+    if x_join == r_wall:
+        return np.maximum(d, z_join - 1.0 - z)
+    # A tucked wall instead runs on, inside the band, until the shoulder fillet
+    # has faded, so the fillet never runs into its end. The band thins below
+    # the join, so the wall sinks to HEAD_BURY under the band's outside.
+    join_deg = np.degrees(np.arctan2(x_join, z_join))
+    d = np.maximum(d, np.radians(theta - join_deg - SHOULDER_FADE_DEG) * rf)
+    sink = HEAD_BURY * smoothstep((theta - join_deg) / HEAD_BURY_DEG)
+    return np.maximum(d, np.where(theta > join_deg, rf - (R_FINGER + band_thickness(theta) - sink), -FACE_D))
 
 
 def cavity(rho, z):
@@ -235,15 +278,10 @@ def cavity(rho, z):
         slope = slope + 2 * CAVITY_LEAN * u / span
     else:
         # A finger narrower than the head: over CAVITY_TUCK the wall curves in
-        # to meet the finger hole along its tangent CAVITY_TUCK_Z above its
-        # widest point, a cubic with no slope at the top.
+        # to meet the finger hole CAVITY_TUCK_Z above its widest point.
         z_meet = CAVITY_TUCK_Z
-        x_hole = np.sqrt(R_FINGER**2 - z_meet**2)
-        shift = x_hole - x_wall
-        bend = CAVITY_TUCK * z_meet / x_hole
-        u = np.clip((z_meet + CAVITY_TUCK - z) / CAVITY_TUCK, 0.0, 1.0)
-        r = r + shift * u * u * (3 - 2 * u) + bend * u * u * (u - 1)
-        slope = slope + np.abs(shift * 6 * u * (1 - u) + bend * u * (3 * u - 2)) / CAVITY_TUCK
+        dr, dslope = tuck(z, x_wall, np.sqrt(R_FINGER**2 - z_meet**2), z_meet, CAVITY_TUCK)
+        r, slope = r + dr, slope + dslope
     walls = (rho - (r - WALL_T)) / np.sqrt(1 + slope**2)
     walls = np.maximum(walls, z_meet - 0.5 - z)
     r_c = FACE_D / 2 - WALL_T
@@ -261,7 +299,8 @@ def arm(x, y, z, sign, rides_over, w_end, phase):
     rf = np.hypot(x, z)
     theta = np.degrees(np.arctan2(sign * x, z)) % 360.0
     th = np.clip(theta, ARM_START_DEG, ARM_END_DEG)
-    w, s = band_width(theta, w_end)
+    s = band_flare(theta)
+    w = BAND_W_ROOT + (w_end - BAND_W_ROOT) * s
     t = BAND_T_ROOT + (BAND_T_END - BAND_T_ROOT) * s
     tip = smoothstep((th - (ARM_END_DEG - TIP_TAPER_DEG)) / TIP_TAPER_DEG)
     w = w + (TIP_W - w) * tip
@@ -310,7 +349,11 @@ class Ring:
         for sign, rides, phase in ((1, False, 0.0), (-1, True, 1.9)):
             d, theta = arm(x, y, z, sign, rides, w_end, phase)
             # Full fillet on the outside; none at the finger, where it would swell into the hole.
-            k = K_SHOULDER * (1 - smoothstep((theta - fade_deg) / 35.0)) * smoothstep((rf - R_FINGER) / BAND_T_ROOT)
+            k = (
+                K_SHOULDER
+                * (1 - smoothstep((theta - fade_deg) / SHOULDER_FADE_DEG))
+                * smoothstep((rf - R_FINGER) / BAND_T_ROOT)
+            )
             k = np.where(theta > 300.0, 0.0, k)
             body = smin(body, d, k)
         body = smax(body, -cavity(rho, z), K_LIP)
