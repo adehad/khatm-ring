@@ -86,9 +86,9 @@ Then run `khatm inscription` and rebuild. It warns when two pieces come within 0
 
 `ring_sdf.py` models the whole ring as one signed distance field and meshes it once with marching cubes. It joins the parts with smooth unions, so every join is a fillet without any later smoothing.
 
-- **Head.** There is no ledge under the face. Across the finger, the wall drops from the crown round and leans out a little (`HEAD_FLARE`) until it runs into the band. Along the finger, the underside follows the band's curve and rises to the face edge, so from the side the head is a boat that narrows into the band. The back is open, with a rolled lip and a domed ceiling, and the hollow's wall meets the finger hole along its tangent.
+- **Head.** There is no ledge under the face. Across the finger, the wall drops from the crown round and leans out a little (`HEAD_FLARE`) until it runs into the band. Along the finger, the underside follows the band's curve and rises to the face edge, so from the side the head is a boat that narrows into the band. The back is open, with a rolled lip and a domed ceiling, and the hollow's wall meets the finger hole along its tangent. On a finger narrower than the head, about US 7 and below, that wall curves inward first (`CAVITY_TUCK`, `CAVITY_TUCK_Z`).
 - **Band.** It flares to 8.5 mm wide and 1.3 mm thick under the head, along one eased curve for width and thickness. It then thins to rounded tips 0.9 mm thick, which you bend to size. A faint width wave keeps it from looking machined.
-- **Joins.** The shoulders blend into the head with a 1.5 mm fillet (`K_SHOULDER`). The fillet fades to nothing before the overlap, so the two ends never fuse (`OVERLAP_GAP`).
+- **Joins.** The shoulders blend into the head with a 1.5 mm fillet (`K_SHOULDER`), which fades out round the finger from where the head's wall meets the band. The fillet fades to nothing before the overlap, so the two ends never fuse (`OVERLAP_GAP`).
 - **Face.** The rim's outer edge is a true circle. Its inner edge follows the hand-cut border of the seal reference, and a 45° bevel leads down into the oxidised field.
 
 The dimensions are estimates from the photos. Change them with the constants at the top of `ring_sdf.py`.

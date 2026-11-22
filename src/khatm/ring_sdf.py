@@ -45,6 +45,8 @@ BOAT_EDGE = 0.9
 BOAT_POWER = 2.2
 WALL_T = 0.7
 CAVITY_LEAN = 0.6
+CAVITY_TUCK = 3.0
+CAVITY_TUCK_Z = 2.5
 PLATE_RIM = 0.8
 PLATE_CENTRE = 0.6
 LETTER_ROUND = 0.18
@@ -169,6 +171,12 @@ def head_radius(z):
     return FACE_D / 2 + HEAD_FLARE * u * u, 2 * HEAD_FLARE * u / HEAD_DROP
 
 
+def head_join():
+    """Where the head's wall, at its widest, meets the band's outside: (x, z)."""
+    r_wall = FACE_D / 2 + HEAD_FLARE
+    return r_wall, np.sqrt(max((R_FINGER + BAND_T_ROOT) ** 2 - r_wall**2, 0.0))
+
+
 def head(y, rho, z, rf):
     """The head: a disc with a rounded crown whose wall runs down into the band.
 
@@ -185,8 +193,7 @@ def head(y, rho, z, rf):
     floor = R_SADDLE + (Z_TOP - BOAT_EDGE - R_SADDLE) * u**BOAT_POWER
     d = smax(d, floor - rf, np.where(u > 0, K_BOAT, K_SEAT))
     # Stop the wall a millimetre below where it meets the band, inside the band's metal.
-    r_wall = FACE_D / 2 + HEAD_FLARE
-    z_join = np.sqrt(max((R_FINGER + BAND_T_ROOT) ** 2 - r_wall**2, 0.0))
+    _, z_join = head_join()
     return np.maximum(d, z_join - 1.0 - z)
 
 
@@ -196,13 +203,25 @@ def cavity(rho, z):
     r, slope = head_radius(z)
     # Low down the wall leans out by CAVITY_LEAN and reaches the finger hole
     # along its tangent, so the two run into each other without a ridge.
-    x_meet = FACE_D / 2 + HEAD_FLARE - WALL_T + CAVITY_LEAN
+    x_wall = FACE_D / 2 + HEAD_FLARE - WALL_T
+    x_meet = x_wall + CAVITY_LEAN
     z_meet = np.sqrt(max(R_FINGER**2 - x_meet**2, 0.0))
     if z_meet > 0:
         span = 2 * CAVITY_LEAN * x_meet / z_meet
         u = np.clip((z_meet + span - z) / span, 0.0, 1.0)
         r = r + CAVITY_LEAN * u * u
         slope = slope + 2 * CAVITY_LEAN * u / span
+    else:
+        # A finger narrower than the head: over CAVITY_TUCK the wall curves in
+        # to meet the finger hole along its tangent CAVITY_TUCK_Z above its
+        # widest point, a cubic with no slope at the top.
+        z_meet = CAVITY_TUCK_Z
+        x_hole = np.sqrt(R_FINGER**2 - z_meet**2)
+        shift = x_hole - x_wall
+        bend = CAVITY_TUCK * z_meet / x_hole
+        u = np.clip((z_meet + CAVITY_TUCK - z) / CAVITY_TUCK, 0.0, 1.0)
+        r = r + shift * u * u * (3 - 2 * u) + bend * u * u * (u - 1)
+        slope = slope + np.abs(shift * 6 * u * (1 - u) + bend * u * (3 * u - 2)) / CAVITY_TUCK
     walls = (rho - (r - WALL_T)) / np.sqrt(1 + slope**2)
     walls = np.maximum(walls, z_meet - 0.5 - z)
     r_c = FACE_D / 2 - WALL_T
@@ -266,10 +285,13 @@ class Ring:
         rf = np.hypot(x, z)
 
         body = head(y, rho, z, rf)
+        # The shoulder fillet fades out below where the head meets the band,
+        # which sits lower round the finger on smaller rings.
+        fade_deg = np.degrees(np.arctan2(*head_join()))
         for sign, rides, phase in ((1, False, 0.0), (-1, True, 1.9)):
             d, theta = arm(x, y, z, sign, rides, w_end, phase)
             # Full fillet on the outside; none at the finger, where it would swell into the hole.
-            k = K_SHOULDER * (1 - smoothstep((theta - 55.0) / 35.0)) * smoothstep((rf - R_FINGER) / BAND_T_ROOT)
+            k = K_SHOULDER * (1 - smoothstep((theta - fade_deg) / 35.0)) * smoothstep((rf - R_FINGER) / BAND_T_ROOT)
             k = np.where(theta > 300.0, 0.0, k)
             body = smin(body, d, k)
         body = smax(body, -cavity(rho, z), K_LIP)
